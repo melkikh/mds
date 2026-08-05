@@ -40,7 +40,7 @@ type node struct {
 	Children []*node `json:"children,omitempty"`
 }
 
-func render(source []byte) template.HTML {
+func render(source []byte) (template.HTML, bool) {
 	head := ""
 	if match := frontmatter.FindSubmatchIndex(source); match != nil {
 		head = renderFrontmatter(string(source[match[2]:match[3]]))
@@ -48,9 +48,11 @@ func render(source []byte) template.HTML {
 	}
 	var buf bytes.Buffer
 	if err := markdown.Convert(source, &buf); err != nil {
-		return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>")
+		return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>"), false
 	}
-	return template.HTML(head + mermaidBlock.ReplaceAllString(buf.String(), `<pre class="mermaid">$1</pre>`))
+	body := buf.String()
+	diagrams := mermaidBlock.MatchString(body)
+	return template.HTML(head + mermaidBlock.ReplaceAllString(body, `<pre class="mermaid">$1</pre>`)), diagrams
 }
 
 func renderFrontmatter(block string) string {

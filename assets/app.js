@@ -1,6 +1,9 @@
 const root = document.documentElement
 const offline = () => 'offline' in root.dataset
 
+const token = document.querySelector('meta[name=mds-token]').content
+const post = url => fetch(url, { method: 'POST', headers: { 'X-Mds-Token': token } })
+
 const events = new EventSource('/_events')
 events.onmessage = () => location.reload()
 events.onerror = () => root.dataset.offline = ''
@@ -15,14 +18,18 @@ document.getElementById('theme-toggle').onclick = () => {
 
 const escape = text => text.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))
 
-const branch = nodes => nodes.map(node => node.type === 'dir'
-  ? `<details open><summary>${escape(node.name)}</summary>${branch(node.children || [])}</details>`
-  : `<a href="${encodeURI('/' + node.path)}">${escape(node.name)}</a>`).join('')
+const branch = nodes => nodes.map(node => {
+  if (node.type === 'file') return `<a href="${encodeURI('/' + node.path)}">${escape(node.name)}</a>`
+  const isRoot = node.type === 'root'
+  const drop = isRoot ? `<button class="drop" title="Stop serving this" data-root="${escape(node.path)}">&#10005;</button>` : ''
+  return `<details open${isRoot ? ' class="root"' : ''}><summary>${escape(node.name)}${drop}</summary>` +
+    `${branch(node.children || [])}</details>`
+}).join('')
 
 const edit = document.getElementById('edit')
 if (edit) {
   edit.onclick = async () => {
-    if ((await fetch('/_edit?path=' + encodeURIComponent(edit.dataset.path))).ok) return
+    if ((await post('/_edit?path=' + encodeURIComponent(edit.dataset.path))).ok) return
     edit.dataset.failed = ''
     setTimeout(() => delete edit.dataset.failed, 900)
   }
@@ -55,13 +62,27 @@ content.onclick = event => {
 const burger = document.getElementById('burger')
 if (burger) {
   const tree = document.getElementById('tree')
-  burger.onclick = async () => {
-    if (!tree.innerHTML) {
-      const data = await (await fetch('/_tree')).json()
-      tree.innerHTML = branch(data.nodes || [])
-    }
-    tree.hidden = !tree.hidden
+  const showTree = async () => {
+    const data = await (await fetch('/_tree')).json()
+    tree.innerHTML = branch(data.nodes || [])
+    tree.hidden = false
   }
+  burger.onclick = () => {
+    if (!tree.hidden) {
+      delete localStorage.mdsTree
+      tree.hidden = true
+      return
+    }
+    localStorage.mdsTree = '1'
+    showTree()
+  }
+  tree.onclick = event => {
+    const drop = event.target.closest('.drop')
+    if (!drop) return
+    event.preventDefault()
+    post('/_drop?root=' + encodeURIComponent(drop.dataset.root))
+  }
+  if (localStorage.mdsTree) showTree()
 }
 
-mermaid.initialize({ startOnLoad: true, theme: root.dataset.theme === 'dark' ? 'dark' : 'default' })
+if (window.mermaid) mermaid.initialize({ startOnLoad: true, theme: root.dataset.theme === 'dark' ? 'dark' : 'default' })

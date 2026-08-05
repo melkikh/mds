@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,8 +14,8 @@ import (
 )
 
 type instance struct {
-	URL string `json:"url"`
-	Pid int    `json:"pid"`
+	URL   string `json:"url"`
+	Token string `json:"token"`
 }
 
 var talk = &http.Client{Timeout: 500 * time.Millisecond}
@@ -39,14 +40,14 @@ func readInstances() []instance {
 func writeInstances(running []instance) {
 	path := instancesFile()
 	body, err := json.Marshal(running)
-	if path == "" || err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
+	if path == "" || err != nil || os.MkdirAll(filepath.Dir(path), 0o700) != nil {
 		return
 	}
-	_ = os.WriteFile(path, body, 0o644)
+	_ = os.WriteFile(path, body, 0o600)
 }
 
-func addInstance(serverURL string) {
-	writeInstances(append(readInstances(), instance{URL: serverURL, Pid: os.Getpid()}))
+func addInstance(serverURL, token string) {
+	writeInstances(append(readInstances(), instance{URL: serverURL, Token: token}))
 }
 
 func dropInstance(serverURL string) {
@@ -55,8 +56,20 @@ func dropInstance(serverURL string) {
 	}))
 }
 
-func postAdd(serverURL, target string) (page string, alive, added bool) {
-	response, err := talk.Post(serverURL+"/_add?path="+url.QueryEscape(target), "", nil)
+func call(running instance, path string) (*http.Response, error) {
+	if parsed, err := url.Parse(running.URL); err != nil || !loopback(parsed.Host) {
+		return nil, errors.New("not a loopback server: " + running.URL)
+	}
+	request, err := http.NewRequest(http.MethodPost, running.URL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set(tokenHeader, running.Token)
+	return talk.Do(request)
+}
+
+func postAdd(running instance, target string) (page string, alive, added bool) {
+	response, err := call(running, "/_add?path="+url.QueryEscape(target))
 	if err != nil {
 		return "", false, false
 	}
@@ -75,7 +88,7 @@ func addToRunning(target string) (string, bool) {
 			alive = append(alive, running)
 			continue
 		}
-		body, answered, added := postAdd(running.URL, target)
+		body, answered, added := postAdd(running, target)
 		if !answered {
 			continue
 		}
@@ -89,7 +102,7 @@ func addToRunning(target string) (string, bool) {
 func stopRunning() {
 	stopped := 0
 	for _, running := range readInstances() {
-		if _, err := talk.Post(running.URL+"/_stop", "", nil); err == nil {
+		if _, err := call(running, "/_stop"); err == nil {
 			stopped++
 		}
 	}

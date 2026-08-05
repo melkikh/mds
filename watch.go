@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -51,20 +50,32 @@ func (s *server) watch() {
 	defer watcher.Close()
 	s.rootsMu.Lock()
 	s.watcher = watcher
-	s.watchRoots()
+	s.watchRoots(true)
+	for _, rt := range s.roots {
+		s.rootFiles(rt)
+	}
 	s.rootsMu.Unlock()
 	debounce := time.AfterFunc(time.Hour, s.broadcast)
 	debounce.Stop()
+	remount := time.NewTicker(30 * time.Second)
+	defer remount.Stop()
 	for {
 		select {
+		case <-remount.C:
+			s.rootsMu.Lock()
+			s.watchRoots(false)
+			s.rootsMu.Unlock()
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
+			if !event.Has(fsnotify.Write) {
+				s.rescan()
+			}
 			if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-				s.rootsMu.RLock()
-				s.watchRoots()
-				s.rootsMu.RUnlock()
+				s.rootsMu.Lock()
+				s.watchRoots(true)
+				s.rootsMu.Unlock()
 			} else if !s.watched(event.Name) {
 				continue
 			}
@@ -74,9 +85,17 @@ func (s *server) watch() {
 	}
 }
 
-func (s *server) watchRoots() {
+func (s *server) watchRoots(rewatch bool) {
 	for _, rt := range s.roots {
-		s.addWatches(rt)
+		_, err := os.Stat(rt.dir)
+		returned := err == nil && !rt.mounted
+		rt.mounted = err == nil
+		if rewatch || returned {
+			s.addWatches(rt)
+		}
+		if returned {
+			s.broadcast()
+		}
 	}
 }
 
@@ -88,8 +107,7 @@ func (s *server) addWatches(rt *root) {
 		_ = s.watcher.Add(rt.dir)
 		return
 	}
-	dirs, _ := scan(rt.dir, s.depth, s.skip)
-	for _, dir := range dirs {
+	for _, dir := range s.rootTree(rt).dirs {
 		_ = s.watcher.Add(dir)
 	}
 }
@@ -100,14 +118,5 @@ func (s *server) watched(name string) bool {
 	}
 	s.rootsMu.RLock()
 	defer s.rootsMu.RUnlock()
-	for _, rt := range s.roots {
-		if rt.entry == "" {
-			if strings.HasPrefix(name, rt.dir+string(os.PathSeparator)) {
-				return true
-			}
-		} else if name == filepath.Join(rt.dir, rt.entry) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.roots, func(rt *root) bool { return rt.covers(name) })
 }

@@ -59,8 +59,13 @@ func TestBuildTree(t *testing.T) {
 	}
 }
 
+func renderHTML(source string) string {
+	html, _ := render([]byte(source))
+	return string(html)
+}
+
 func TestRenderFrontmatter(t *testing.T) {
-	html := string(render([]byte("---\nname: mds\ndescription: renders md: nicely\ntools:\n  - Bash\n  - Sed\n---\n\n# Title\n")))
+	html := renderHTML("---\nname: mds\ndescription: renders md: nicely\ntools:\n  - Bash\n  - Sed\n---\n\n# Title\n")
 	for _, want := range []string{
 		`<dl class="frontmatter">`, "<dt>name</dt><dd>mds</dd>", "<dd>renders md: nicely</dd>",
 		"<dt>tools</dt><dd>Bash, Sed</dd>", `<h1 id="title">Title</h1>`,
@@ -72,11 +77,11 @@ func TestRenderFrontmatter(t *testing.T) {
 	if strings.Contains(html, "<hr") || strings.Contains(html, "<h2") {
 		t.Errorf("frontmatter leaked into the body:\n%s", html)
 	}
-	body := string(render([]byte("# Title\n\n---\n\ntail\n")))
+	body := renderHTML("# Title\n\n---\n\ntail\n")
 	if !strings.Contains(body, "<hr") || strings.Contains(body, "frontmatter") {
 		t.Errorf("a thematic break mid-document must stay a rule:\n%s", body)
 	}
-	if got := string(render([]byte("---\n---\n\n# Title\n"))); strings.Contains(got, "frontmatter") {
+	if got := renderHTML("---\n---\n\n# Title\n"); strings.Contains(got, "frontmatter") {
 		t.Errorf("empty frontmatter should render nothing:\n%s", got)
 	}
 }
@@ -84,13 +89,19 @@ func TestRenderFrontmatter(t *testing.T) {
 func TestRender(t *testing.T) {
 	source := "# Title\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```go\nfunc main() {}\n```\n\n" +
 		"| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n"
-	html := string(render([]byte(source)))
+	html, diagrams := render([]byte(source))
 	for _, want := range []string{`<pre class="mermaid">`, "A --&gt; B", `class="chroma"`, "<table>", `type="checkbox"`} {
-		if !strings.Contains(html, want) {
+		if !strings.Contains(string(html), want) {
 			t.Errorf("render() missing %q in\n%s", want, html)
 		}
 	}
-	if strings.Contains(html, "language-mermaid") {
+	if strings.Contains(string(html), "language-mermaid") {
 		t.Errorf("render() left an unconverted mermaid block in\n%s", html)
+	}
+	if !diagrams {
+		t.Error("render() did not report a mermaid block, so the page would not load mermaid")
+	}
+	if _, diagrams := render([]byte("# Title\n\n```go\nfunc main() {}\n```\n")); diagrams {
+		t.Error("render() reported a mermaid block in a document that has none")
 	}
 }

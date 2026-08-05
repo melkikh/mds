@@ -1,18 +1,20 @@
 <!doctype html>
-<html data-theme="{{.Theme}}">
+<html{{if .Stale}} data-stale{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="mds-token" content="{{.Token}}">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="/_static/app.css">
-<script>document.documentElement.dataset.theme = localStorage.mdsTheme || "{{.Theme}}"</script>
+<script nonce="{{.Nonce}}">document.documentElement.dataset.theme = localStorage.mdsTheme ||
+  (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")</script>
 </head>
 <body>
 <button id="theme-toggle" title="Toggle theme">&#9686;</button>
 {{if .Path}}<button id="edit" title="Open in editor" data-path="{{.Path}}">&#9998;</button>{{end}}
 {{if .Tree}}<button id="burger" title="Files">&#8801;</button><aside id="tree" hidden></aside>{{end}}
 <main>{{.Content}}</main>
-<script src="/_static/mermaid.min.js"></script>
-<script src="/_static/app.js"></script>
+{{if .Mermaid}}<script nonce="{{.Nonce}}" src="/_static/mermaid.min.js"></script>{{end}}
+<script nonce="{{.Nonce}}" src="/_static/app.js"></script>
 </body>
 </html>

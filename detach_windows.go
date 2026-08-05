@@ -2,8 +2,11 @@ package main
 
 import "syscall"
 
-const createNewProcessGroup = 0x00000200
+const (
+	createNewProcessGroup = 0x00000200
+	detachedProcess       = 0x00000008
+)
 
 func detachAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{CreationFlags: createNewProcessGroup}
+	return &syscall.SysProcAttr{CreationFlags: createNewProcessGroup | detachedProcess}
 }

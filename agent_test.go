@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetectAgent(t *testing.T) {
@@ -65,8 +66,11 @@ func TestDetachedServer(t *testing.T) {
 	launcher := exec.Command(binary, "-b", "--new", "--no-open", fixture(t))
 	cache := t.TempDir()
 	launcher.Env = append(os.Environ(), "CLAUDECODE=1", "HOME="+cache, "XDG_CACHE_HOME="+cache, "LOCALAPPDATA="+cache)
-	launcher.Stderr = os.Stderr
 	stdout, err := launcher.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := launcher.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +78,20 @@ func TestDetachedServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	printed, _ := io.ReadAll(stdout)
+	drained := make(chan []byte, 1)
+	go func() {
+		leftover, _ := io.ReadAll(stderr)
+		drained <- leftover
+	}()
+	select {
+	case leftover := <-drained:
+		if len(leftover) > 0 {
+			t.Errorf("mds -b wrote to stderr: %s", leftover)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stderr never reached EOF: the detached server still holds the pipe it inherited, " +
+			"so an agent reading stderr to the end would block for as long as the server runs")
+	}
 	if err := launcher.Wait(); err != nil {
 		t.Fatalf("mds -b did not exit: %v", err)
 	}

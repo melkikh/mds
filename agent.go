@@ -2,10 +2,11 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 const childEnv = "MDS_CHILD"
@@ -42,9 +43,12 @@ func detach(agent string) {
 	}
 	child := exec.Command(binary, childArgs(os.Args[1:])...)
 	child.Env = append(os.Environ(), childEnv+"=1")
-	child.Stderr = os.Stderr
 	child.SysProcAttr = detachAttr()
 	stdout, err := child.StdoutPipe()
+	if err != nil {
+		fatal(err)
+	}
+	stderr, err := child.StderrPipe()
 	if err != nil {
 		fatal(err)
 	}
@@ -53,7 +57,8 @@ func detach(agent string) {
 	}
 	url, err := bufio.NewReader(stdout).ReadString('\n')
 	if err != nil {
-		fatal(errors.New("background server failed to start"))
+		reason, _ := io.ReadAll(stderr)
+		fatal(fmt.Errorf("background server failed to start: %s", strings.TrimSpace(string(reason))))
 	}
 	fmt.Print(url)
 	if agent == "" {
@@ -64,14 +69,10 @@ func detach(agent string) {
 The page live-reloads on every save, so there is no need to restart it.
 Show the URL above to the user instead of pasting the file into the chat.
 Another file: run mds again with its path, it lands in the sidebar of the same page.
-Stop it: mds --stop. Install the slash command: mds --skill > ~/.claude/skills/mds/SKILL.md
+Stop it: mds --stop
 `, child.Process.Pid)
 }
 
 func printSkill() {
-	skill, err := assetFS.ReadFile("assets/skill.md")
-	if err != nil {
-		fatal(err)
-	}
-	os.Stdout.Write(skill)
+	os.Stdout.Write(skillFile)
 }

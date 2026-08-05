@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"fmt"
-	"html/template"
 	"net"
 	"net/http"
 	"os"
@@ -12,10 +11,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 )
 
 //go:embed assets
 var assetFS embed.FS
+
+//go:embed assets/skill.md
+var skillFile []byte
 
 const usage = `mds — render markdown in the browser
 
@@ -24,16 +28,17 @@ usage:
 
   path               file or directory to serve (default ".")
   -d, --depth N      max directory depth, 0 = root only, -1 = unlimited (default 5)
-  -t, --theme NAME   initial theme, light or dark (default "light")
   -s, --skip NAMES   comma-separated directory names to skip (default "node_modules,vendor,dist,build,target")
   -b, --background   serve in a detached process, print the URL and exit
       --new          start a separate server instead of reusing the running one
       --no-open      do not open a browser, just print the URL
       --stop         stop every running server
-      --skill        print a skill file teaching a coding agent to use mds
+      --skill        print a skill file teaching a coding agent to use mds;
+                     redirect it into wherever your agent keeps its instructions
   -h, --help         show this help
 
   MDS_EDITOR         command the pencil button runs, e.g. "code -g" (default: system opener)
+                     quote a path that has spaces: "\"C:\\Program Files\\ed.exe\" -g"
 
 A second mds adds its path to the server that is already running and prints the URL of
 that page; the sidebar of the open tab picks it up. Running under a coding agent
@@ -45,7 +50,6 @@ var defaultSkip = []string{"node_modules", "vendor", "dist", "build", "target"}
 type options struct {
 	target     string
 	depth      int
-	theme      string
 	skip       []string
 	background bool
 	fresh      bool
@@ -53,7 +57,10 @@ type options struct {
 }
 
 func main() {
-	opts := parseArgs(os.Args[1:])
+	opts, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fatal(err)
+	}
 	abs, err := filepath.Abs(opts.target)
 	if err != nil {
 		fatal(err)
@@ -76,23 +83,15 @@ func main() {
 		detach(agent)
 		return
 	}
-	s := &server{
-		roots:  []*root{newRoot(abs, info.IsDir(), "")},
-		depth:  opts.depth,
-		theme:  opts.theme,
-		skip:   opts.skip,
-		launch: openInEditor,
-		tmpl:   template.Must(template.ParseFS(assetFS, "assets/page.html")),
-		subs:   map[chan struct{}]struct{}{},
-	}
+	s := newServer(newRoot(abs, info.IsDir(), ""), opts)
 	listener, serverURL := listen()
-	httpServer := &http.Server{Handler: s.routes()}
+	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	s.url, s.shutdown = serverURL, func() { _ = httpServer.Close() }
 	fmt.Println(serverURL)
 	if !opts.noOpen {
 		_ = openExternal(serverURL)
 	}
-	addInstance(serverURL)
+	addInstance(serverURL, s.token)
 	go s.watch()
 	if err := httpServer.Serve(listener); err != http.ErrServerClosed {
 		fatal(err)
@@ -105,8 +104,8 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func parseArgs(args []string) options {
-	opts := options{target: ".", depth: 5, theme: "light", skip: defaultSkip}
+func parseArgs(args []string) (options, error) {
+	opts := options{target: ".", depth: 5, skip: defaultSkip}
 	for i := 0; i < len(args); i++ {
 		value := ""
 		if i+1 < len(args) {
@@ -133,30 +132,28 @@ func parseArgs(args []string) options {
 				opts.depth = n
 			}
 			i++
-		case "-t", "--theme":
-			if value == "dark" {
-				opts.theme = "dark"
-			}
-			i++
 		case "-s", "--skip":
 			opts.skip = strings.Split(value, ",")
 			i++
 		default:
+			if strings.HasPrefix(args[i], "-") {
+				return opts, fmt.Errorf("unknown flag %q, see mds --help", args[i])
+			}
 			opts.target = args[i]
 		}
 	}
-	return opts
+	return opts, nil
 }
 
 func listen() (net.Listener, string) {
-	if l, err := net.Listen("tcp", "127.0.0.1:8080"); err == nil {
-		return l, "http://127.0.0.1:8080"
+	l, err := net.Listen("tcp", "127.0.0.1:8080")
+	if err != nil {
+		l, err = net.Listen("tcp", "127.0.0.1:0")
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fatal(err)
 	}
-	return l, fmt.Sprintf("http://127.0.0.1:%d", l.Addr().(*net.TCPAddr).Port)
+	return l, "http://" + l.Addr().String()
 }
 
 func openExternal(target string) error {
@@ -171,9 +168,31 @@ func openExternal(target string) error {
 }
 
 func openInEditor(target string) error {
-	editor := strings.Fields(os.Getenv("MDS_EDITOR"))
+	editor := splitCommand(os.Getenv("MDS_EDITOR"))
 	if len(editor) == 0 {
 		return openExternal(target)
 	}
 	return exec.Command(editor[0], append(editor[1:], target)...).Start()
+}
+
+func splitCommand(command string) []string {
+	parts, quoted := []string{}, false
+	var word strings.Builder
+	for _, r := range command {
+		switch {
+		case r == '"':
+			quoted = !quoted
+		case !quoted && unicode.IsSpace(r):
+			if word.Len() > 0 {
+				parts = append(parts, word.String())
+				word.Reset()
+			}
+		default:
+			word.WriteRune(r)
+		}
+	}
+	if word.Len() > 0 {
+		parts = append(parts, word.String())
+	}
+	return parts
 }

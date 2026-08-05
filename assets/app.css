@@ -175,8 +175,8 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
 #tree[hidden] { display: none; }
 
 [data-offline] #burger, [data-offline] #edit { opacity: .15; pointer-events: none; }
-[data-offline] body::after {
-  content: "server stopped";
+
+[data-stale] body::after, [data-offline] body::after {
   position: fixed;
   bottom: 14px;
   left: 50%;
@@ -188,7 +188,27 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
   border-radius: 999px;
 }
 
+[data-stale] body::after { content: "file unavailable, showing the last copy"; }
+[data-offline] body::after { content: "server stopped"; }
+
 #tree details { padding-left: 8px; }
+#tree details.root { padding-left: 0; margin-top: 10px; }
+#tree details.root > summary { color: var(--fg); font-weight: 600; }
+
+#tree .drop {
+  float: right;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+#tree summary:hover .drop { opacity: 1; }
+#tree .drop:hover { color: var(--kw); }
 #tree summary { color: var(--muted); cursor: pointer; padding: 2px 0; }
 #tree a { display: block; padding: 2px 0 2px 14px; white-space: nowrap; }
 
