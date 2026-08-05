@@ -55,6 +55,22 @@ a:hover { text-decoration: underline; }
 p, ul, ol, blockquote, table, pre { margin: 0 0 1em; }
 li > ul, li > ol { margin-bottom: 0; }
 
+.frontmatter {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0 0 2em;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.frontmatter dt { font-weight: 600; }
+.frontmatter dd { margin: 0; }
+
 blockquote {
   padding: 0 1em;
   color: var(--muted);

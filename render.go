@@ -31,6 +31,8 @@ var markdown = goldmark.New(
 
 var mermaidBlock = regexp.MustCompile(`(?s)<pre><code class="language-mermaid">(.*?)</code></pre>`)
 
+var frontmatter = regexp.MustCompile(`(?s)\A---[ \t]*\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\z)`)
+
 type node struct {
 	Type     string  `json:"type"`
 	Name     string  `json:"name"`
@@ -39,11 +41,42 @@ type node struct {
 }
 
 func render(source []byte) template.HTML {
+	head := ""
+	if match := frontmatter.FindSubmatchIndex(source); match != nil {
+		head = renderFrontmatter(string(source[match[2]:match[3]]))
+		source = source[match[1]:]
+	}
 	var buf bytes.Buffer
 	if err := markdown.Convert(source, &buf); err != nil {
 		return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>")
 	}
-	return template.HTML(mermaidBlock.ReplaceAllString(buf.String(), `<pre class="mermaid">$1</pre>`))
+	return template.HTML(head + mermaidBlock.ReplaceAllString(buf.String(), `<pre class="mermaid">$1</pre>`))
+}
+
+func renderFrontmatter(block string) string {
+	escape, rows := template.HTMLEscapeString, []string{}
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimSpace(line)
+		key, value, pair := strings.Cut(line, ":")
+		if pair && trimmed != "" && !strings.HasPrefix(trimmed, "-") {
+			rows = append(rows, "<dt>"+escape(strings.TrimSpace(key))+"</dt><dd>"+escape(strings.TrimSpace(value)))
+			continue
+		}
+		if trimmed == "" || len(rows) == 0 {
+			continue
+		}
+		last, separator := rows[len(rows)-1], " "
+		if strings.HasSuffix(last, "<dd>") {
+			separator = ""
+		} else if strings.HasPrefix(trimmed, "-") {
+			separator = ", "
+		}
+		rows[len(rows)-1] = last + separator + escape(strings.TrimPrefix(trimmed, "- "))
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return `<dl class="frontmatter">` + strings.Join(rows, "</dd>") + "</dd></dl>"
 }
 
 func scan(root string, depth int, skip []string) (dirs, files []string) {

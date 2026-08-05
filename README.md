@@ -42,8 +42,7 @@ Dot-directories are always skipped.
 
 ## In the page
 
-Code blocks have a copy button, inline code copies on click. The pencil opens the current
-file in your editor — by default whatever the system associates with `.md`, or set
-`MDS_EDITOR="code -g"`.
+Code blocks have a copy button. The pencil opens the file in your editor, set
+`MDS_EDITOR="code -g"` to pick one.
 
 GFM (tables, task lists, strikethrough), syntax highlighting and mermaid diagrams — nothing to configure.
