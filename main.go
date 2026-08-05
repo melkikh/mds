@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"cmp"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -14,21 +12,13 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/fsnotify/fsnotify"
-	"github.com/yuin/goldmark"
-	highlighting "github.com/yuin/goldmark-highlighting/v2"
-	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/parser"
-	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 )
 
 //go:embed assets
@@ -44,28 +34,11 @@ usage:
   -t, --theme NAME   initial theme, light or dark (default "light")
   -s, --skip NAMES   comma-separated directory names to skip (default "node_modules,vendor,dist,build,target")
   -h, --help         show this help
+
+  MDS_EDITOR         command the pencil button runs, e.g. "code -g" (default: system opener)
 `
 
 var defaultSkip = []string{"node_modules", "vendor", "dist", "build", "target"}
-
-var markdown = goldmark.New(
-	goldmark.WithExtensions(
-		extension.GFM,
-		extension.Typographer,
-		highlighting.NewHighlighting(highlighting.WithFormatOptions(chromahtml.WithClasses(true))),
-	),
-	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
-	goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()),
-)
-
-var mermaidBlock = regexp.MustCompile(`(?s)<pre><code class="language-mermaid">(.*?)</code></pre>`)
-
-type node struct {
-	Type     string  `json:"type"`
-	Name     string  `json:"name"`
-	Path     string  `json:"path"`
-	Children []*node `json:"children,omitempty"`
-}
 
 type server struct {
 	root    string
@@ -74,6 +47,7 @@ type server struct {
 	depth   int
 	theme   string
 	skip    []string
+	launch  func(string) error
 	tmpl    *template.Template
 	mu      sync.Mutex
 	subs    map[chan struct{}]struct{}
@@ -90,19 +64,20 @@ func main() {
 		fatal(err)
 	}
 	s := &server{
-		root:  abs,
-		depth: depth,
-		theme: theme,
-		skip:  skip,
-		tmpl:  template.Must(template.ParseFS(assetFS, "assets/page.html")),
-		subs:  map[chan struct{}]struct{}{},
+		root:   abs,
+		depth:  depth,
+		theme:  theme,
+		skip:   skip,
+		launch: openInEditor,
+		tmpl:   template.Must(template.ParseFS(assetFS, "assets/page.html")),
+		subs:   map[chan struct{}]struct{}{},
 	}
 	if s.dirMode = info.IsDir(); !s.dirMode {
 		s.root, s.entry = filepath.Dir(abs), filepath.Base(abs)
 	}
 	listener, url := listen()
 	fmt.Println(url)
-	openBrowser(url)
+	_ = openExternal(url)
 	go s.watch()
 	fatal(http.Serve(listener, s.routes()))
 }
@@ -154,17 +129,23 @@ func listen() (net.Listener, string) {
 	return l, fmt.Sprintf("http://127.0.0.1:%d", l.Addr().(*net.TCPAddr).Port)
 }
 
-func openBrowser(url string) {
-	var cmd *exec.Cmd
+func openExternal(target string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		return exec.Command("open", target).Start()
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", target).Start()
 	default:
-		cmd = exec.Command("xdg-open", url)
+		return exec.Command("xdg-open", target).Start()
 	}
-	_ = cmd.Start()
+}
+
+func openInEditor(target string) error {
+	editor := strings.Fields(os.Getenv("MDS_EDITOR"))
+	if len(editor) == 0 {
+		return openExternal(target)
+	}
+	return exec.Command(editor[0], append(editor[1:], target)...).Start()
 }
 
 func (s *server) routes() http.Handler {
@@ -173,6 +154,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("GET /_static/", http.StripPrefix("/_static/", http.FileServerFS(static)))
 	mux.HandleFunc("GET /_events", s.serveEvents)
 	mux.HandleFunc("GET /_tree", s.serveTree)
+	mux.HandleFunc("GET /_edit", s.serveEdit)
 	mux.HandleFunc("GET /", s.serveContent)
 	return mux
 }
@@ -185,7 +167,7 @@ func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rel == "" {
-		s.renderPage(w, http.StatusOK, filepath.Base(s.root), "")
+		s.renderPage(w, http.StatusOK, filepath.Base(s.root), "", "")
 		return
 	}
 	full := filepath.Join(s.root, filepath.FromSlash(rel))
@@ -196,10 +178,10 @@ func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
 	source, err := os.ReadFile(full)
 	if err != nil {
 		body := "<h1>404</h1><p>no such file: <code>" + template.HTMLEscapeString(rel) + "</code></p>"
-		s.renderPage(w, http.StatusNotFound, "404", template.HTML(body))
+		s.renderPage(w, http.StatusNotFound, "404", "", template.HTML(body))
 		return
 	}
-	s.renderPage(w, http.StatusOK, path.Base(rel), render(source))
+	s.renderPage(w, http.StatusOK, path.Base(rel), rel, render(source))
 }
 
 func (s *server) indexFile() string {
@@ -211,17 +193,37 @@ func (s *server) indexFile() string {
 	return ""
 }
 
-func (s *server) renderPage(w http.ResponseWriter, status int, title string, content template.HTML) {
+func (s *server) renderPage(w http.ResponseWriter, status int, title, rel string, content template.HTML) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_ = s.tmpl.Execute(w, map[string]any{"Theme": s.theme, "Title": title, "DirMode": s.dirMode, "Content": content})
+	_ = s.tmpl.Execute(w, map[string]any{
+		"Theme": s.theme, "Title": title, "Path": rel, "DirMode": s.dirMode, "Content": content,
+	})
 }
 
 func (s *server) serveTree(w http.ResponseWriter, r *http.Request) {
 	_, files := scan(s.root, s.depth, s.skip)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"root": filepath.Base(s.root), "nodes": buildTree(files)})
+}
+
+func (s *server) serveEdit(w http.ResponseWriter, r *http.Request) {
+	rel := strings.TrimPrefix(path.Clean(r.URL.Query().Get("path")), "/")
+	if !isMarkdown(rel) || strings.HasPrefix(rel, "..") {
+		http.Error(w, "not a markdown file", http.StatusBadRequest)
+		return
+	}
+	full := filepath.Join(s.root, filepath.FromSlash(rel))
+	if _, err := os.Stat(full); err != nil {
+		http.Error(w, "no such file", http.StatusNotFound)
+		return
+	}
+	if err := s.launch(full); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) serveEvents(w http.ResponseWriter, r *http.Request) {
@@ -298,70 +300,4 @@ func (s *server) addWatches(watcher *fsnotify.Watcher) {
 	for _, dir := range dirs {
 		_ = watcher.Add(dir)
 	}
-}
-
-func render(source []byte) template.HTML {
-	var buf bytes.Buffer
-	if err := markdown.Convert(source, &buf); err != nil {
-		return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>")
-	}
-	return template.HTML(mermaidBlock.ReplaceAllString(buf.String(), `<pre class="mermaid">$1</pre>`))
-}
-
-func scan(root string, depth int, skip []string) (dirs, files []string) {
-	_ = filepath.WalkDir(root, func(p string, entry fs.DirEntry, walkErr error) error {
-		rel, err := filepath.Rel(root, p)
-		if walkErr != nil || err != nil {
-			return nil
-		}
-		switch {
-		case !entry.IsDir():
-			if isMarkdown(p) {
-				files = append(files, filepath.ToSlash(rel))
-			}
-		case rel != "." && (slices.Contains(skip, entry.Name()) || strings.HasPrefix(entry.Name(), ".") ||
-			depth >= 0 && strings.Count(rel, string(os.PathSeparator)) >= depth):
-			return fs.SkipDir
-		default:
-			dirs = append(dirs, p)
-		}
-		return nil
-	})
-	return dirs, files
-}
-
-func buildTree(files []string) []*node {
-	root := &node{}
-	dirs := map[string]*node{}
-	for _, file := range files {
-		parts := strings.Split(file, "/")
-		parent := root
-		for i := 0; i < len(parts)-1; i++ {
-			key := strings.Join(parts[:i+1], "/")
-			dir, ok := dirs[key]
-			if !ok {
-				dir = &node{Type: "dir", Name: parts[i], Path: key}
-				dirs[key] = dir
-				parent.Children = append(parent.Children, dir)
-			}
-			parent = dir
-		}
-		parent.Children = append(parent.Children, &node{Type: "file", Name: parts[len(parts)-1], Path: file})
-	}
-	sortNodes(root.Children)
-	return root.Children
-}
-
-func sortNodes(nodes []*node) {
-	slices.SortFunc(nodes, func(a, b *node) int {
-		return cmp.Or(strings.Compare(a.Type, b.Type), strings.Compare(a.Name, b.Name))
-	})
-	for _, n := range nodes {
-		sortNodes(n.Children)
-	}
-}
-
-func isMarkdown(p string) bool {
-	ext := strings.ToLower(filepath.Ext(p))
-	return ext == ".md" || ext == ".markdown"
 }

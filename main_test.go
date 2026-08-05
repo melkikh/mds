@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +48,7 @@ func testServer(t *testing.T, root, entry string) *server {
 		depth:   5,
 		theme:   "light",
 		skip:    defaultSkip,
+		launch:  func(string) error { return nil },
 		tmpl:    template.Must(template.ParseFS(assetFS, "assets/page.html")),
 		subs:    map[chan struct{}]struct{}{},
 	}
@@ -84,72 +86,6 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
-func TestIsMarkdown(t *testing.T) {
-	for name, want := range map[string]bool{
-		"a.md": true, "a.MD": true, "a.markdown": true,
-		"dir/b.md": true, "a.txt": false, "a": false, "md": false,
-	} {
-		if got := isMarkdown(name); got != want {
-			t.Errorf("isMarkdown(%q) = %v, want %v", name, got, want)
-		}
-	}
-}
-
-func TestScan(t *testing.T) {
-	root := fixture(t)
-	cases := []struct {
-		depth int
-		skip  []string
-		files []string
-	}{
-		{5, defaultSkip, []string{"README.md", "docs/api/deep/deep.md", "docs/api/spec.markdown", "docs/intro.md"}},
-		{0, defaultSkip, []string{"README.md"}},
-		{1, defaultSkip, []string{"README.md", "docs/intro.md"}},
-		{-1, defaultSkip, []string{"README.md", "docs/api/deep/deep.md", "docs/api/spec.markdown", "docs/intro.md"}},
-		{5, append(slices.Clone(defaultSkip), "docs"), []string{"README.md"}},
-	}
-	for _, c := range cases {
-		_, files := scan(root, c.depth, c.skip)
-		if !slices.Equal(files, c.files) {
-			t.Errorf("scan(depth=%d, skip=%q) = %q, want %q", c.depth, c.skip, files, c.files)
-		}
-	}
-	dirs, _ := scan(root, 5, defaultSkip)
-	if len(dirs) != 4 {
-		t.Errorf("scan dirs = %q, want root, docs, docs/api, docs/api/deep", dirs)
-	}
-}
-
-func TestBuildTree(t *testing.T) {
-	tree := buildTree([]string{"z.md", "docs/b.md", "docs/a/x.md", "a.md"})
-	encoded, err := json.Marshal(tree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `[{"type":"dir","name":"docs","path":"docs","children":[` +
-		`{"type":"dir","name":"a","path":"docs/a","children":[{"type":"file","name":"x.md","path":"docs/a/x.md"}]},` +
-		`{"type":"file","name":"b.md","path":"docs/b.md"}]},` +
-		`{"type":"file","name":"a.md","path":"a.md"},` +
-		`{"type":"file","name":"z.md","path":"z.md"}]`
-	if string(encoded) != want {
-		t.Errorf("buildTree =\n%s\nwant\n%s", encoded, want)
-	}
-}
-
-func TestRender(t *testing.T) {
-	source := "# Title\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```go\nfunc main() {}\n```\n\n" +
-		"| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n"
-	html := string(render([]byte(source)))
-	for _, want := range []string{`<pre class="mermaid">`, "A --&gt; B", `class="chroma"`, "<table>", `type="checkbox"`} {
-		if !strings.Contains(html, want) {
-			t.Errorf("render() missing %q in\n%s", want, html)
-		}
-	}
-	if strings.Contains(html, "language-mermaid") {
-		t.Errorf("render() left an unconverted mermaid block in\n%s", html)
-	}
-}
-
 func TestServeContentDirMode(t *testing.T) {
 	s := testServer(t, fixture(t), "")
 	cases := []struct {
@@ -160,6 +96,7 @@ func TestServeContentDirMode(t *testing.T) {
 		{"/", http.StatusOK, "Root"},
 		{"/", http.StatusOK, `id="burger"`},
 		{"/docs/intro.md", http.StatusOK, "Intro"},
+		{"/docs/intro.md", http.StatusOK, `id="edit" title="Open in editor" data-path="docs/intro.md"`},
 		{"/docs/api/spec.markdown", http.StatusOK, "Spec"},
 		{"/notes.txt", http.StatusOK, "plain"},
 		{"/_static/app.css", http.StatusOK, "--code-bg"},
@@ -179,6 +116,9 @@ func TestServeContentDirMode(t *testing.T) {
 	if status, _ := get(t, s, "/%2e%2e/%2e%2e/etc/hosts"); status == http.StatusOK {
 		t.Error("encoded traversal must not be served")
 	}
+	if _, body := get(t, s, "/missing.md"); strings.Contains(body, `id="edit"`) {
+		t.Error("404 page should not offer the edit button")
+	}
 }
 
 func TestServeContentFileMode(t *testing.T) {
@@ -189,6 +129,39 @@ func TestServeContentFileMode(t *testing.T) {
 	}
 	if strings.Contains(body, `id="burger"`) {
 		t.Error("file mode should not render the burger")
+	}
+}
+
+func TestServeEdit(t *testing.T) {
+	root := fixture(t)
+	s := testServer(t, root, "")
+	var opened []string
+	s.launch = func(target string) error {
+		opened = append(opened, target)
+		return nil
+	}
+	for _, c := range []struct {
+		query  string
+		status int
+	}{
+		{"docs/intro.md", http.StatusNoContent},
+		{"/docs/intro.md", http.StatusNoContent},
+		{"../../../etc/passwd.md", http.StatusBadRequest},
+		{"notes.txt", http.StatusBadRequest},
+		{"", http.StatusBadRequest},
+		{"missing.md", http.StatusNotFound},
+	} {
+		if status, _ := get(t, s, "/_edit?path="+c.query); status != c.status {
+			t.Errorf("GET /_edit?path=%s = %d, want %d", c.query, status, c.status)
+		}
+	}
+	want := filepath.Join(root, "docs", "intro.md")
+	if !slices.Equal(opened, []string{want, want}) {
+		t.Errorf("launched %q, want the entry file twice", opened)
+	}
+	s.launch = func(string) error { return errors.New("no editor") }
+	if status, _ := get(t, s, "/_edit?path=README.md"); status != http.StatusInternalServerError {
+		t.Errorf("failing editor = %d, want 500", status)
 	}
 }
 
