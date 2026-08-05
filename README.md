@@ -29,6 +29,7 @@ sidebar of the page that is already open, and the printed URL points straight at
 -s, --skip NAMES   dirs to ignore (default node_modules,vendor,dist,build,target)
 -b, --background   serve detached, print the URL and exit
     --new          start a separate server instead of joining the running one
+    --no-open      do not open a browser, just print the URL
     --stop         stop every running server
     --skill        print a skill file that teaches a coding agent to use mds
 -h, --help

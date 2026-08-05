@@ -32,7 +32,7 @@ func TestChildArgs(t *testing.T) {
 		want []string
 	}{
 		{[]string{"-b", "plan.md"}, []string{"plan.md"}},
-		{[]string{"docs", "--background", "-d", "2"}, []string{"docs", "-d", "2"}},
+		{[]string{"docs", "--background", "-d", "2", "--no-open"}, []string{"docs", "-d", "2", "--no-open"}},
 		{[]string{"plan.md"}, []string{"plan.md"}},
 		{nil, []string{}},
 	} {
@@ -62,8 +62,9 @@ func TestDetachedServer(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	launcher := exec.Command(binary, "-b", fixture(t))
-	launcher.Env = append(os.Environ(), "CLAUDECODE=1")
+	launcher := exec.Command(binary, "-b", "--new", "--no-open", fixture(t))
+	cache := t.TempDir()
+	launcher.Env = append(os.Environ(), "CLAUDECODE=1", "HOME="+cache, "XDG_CACHE_HOME="+cache, "LOCALAPPDATA="+cache)
 	launcher.Stderr = os.Stderr
 	stdout, err := launcher.StdoutPipe()
 	if err != nil {

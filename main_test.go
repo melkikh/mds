@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -74,24 +75,32 @@ func get(t *testing.T, s *server, url string) (int, string) {
 }
 
 func TestParseArgs(t *testing.T) {
+	defaults := options{target: ".", depth: 5, theme: "light", skip: defaultSkip}
+	with := func(change func(*options)) options {
+		opts := defaults
+		change(&opts)
+		return opts
+	}
 	cases := []struct {
 		args []string
 		want options
 	}{
-		{nil, options{".", 5, "light", defaultSkip, false, false}},
-		{[]string{"plan.md"}, options{"plan.md", 5, "light", defaultSkip, false, false}},
-		{[]string{"-d", "0", "docs"}, options{"docs", 0, "light", defaultSkip, false, false}},
-		{[]string{"docs", "--depth", "-1", "--theme", "dark"}, options{"docs", -1, "dark", defaultSkip, false, false}},
-		{[]string{"-s", "target,out"}, options{".", 5, "light", []string{"target", "out"}, false, false}},
-		{[]string{"-b", "plan.md"}, options{"plan.md", 5, "light", defaultSkip, true, false}},
-		{[]string{"--background", "--new"}, options{".", 5, "light", defaultSkip, true, true}},
-		{[]string{"-t"}, options{".", 5, "light", defaultSkip, false, false}},
-		{[]string{"-d", "oops"}, options{".", 5, "light", defaultSkip, false, false}},
+		{nil, defaults},
+		{[]string{"plan.md"}, with(func(o *options) { o.target = "plan.md" })},
+		{[]string{"-d", "0", "docs"}, with(func(o *options) { o.target, o.depth = "docs", 0 })},
+		{[]string{"docs", "--depth", "-1", "--theme", "dark"}, with(func(o *options) {
+			o.target, o.depth, o.theme = "docs", -1, "dark"
+		})},
+		{[]string{"-s", "target,out"}, with(func(o *options) { o.skip = []string{"target", "out"} })},
+		{[]string{"-b", "plan.md"}, with(func(o *options) { o.target, o.background = "plan.md", true })},
+		{[]string{"--background", "--new", "--no-open"}, with(func(o *options) {
+			o.background, o.fresh, o.noOpen = true, true, true
+		})},
+		{[]string{"-t"}, defaults},
+		{[]string{"-d", "oops"}, defaults},
 	}
 	for _, c := range cases {
-		got := parseArgs(c.args)
-		if got.target != c.want.target || got.depth != c.want.depth || got.theme != c.want.theme ||
-			!slices.Equal(got.skip, c.want.skip) || got.background != c.want.background || got.fresh != c.want.fresh {
+		if got := parseArgs(c.args); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("parseArgs(%q) = %+v, want %+v", c.args, got, c.want)
 		}
 	}
