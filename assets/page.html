@@ -10,7 +10,7 @@
 <body>
 <button id="theme-toggle" title="Toggle theme">&#9686;</button>
 {{if .Path}}<button id="edit" title="Open in editor" data-path="{{.Path}}">&#9998;</button>{{end}}
-{{if .DirMode}}<button id="burger" title="Files">&#8801;</button><aside id="tree" hidden></aside>{{end}}
+{{if .Tree}}<button id="burger" title="Files">&#8801;</button><aside id="tree" hidden></aside>{{end}}
 <main>{{.Content}}</main>
 <script src="/_static/mermaid.min.js"></script>
 <script src="/_static/app.js"></script>

@@ -11,8 +11,9 @@ block, so run it like any other command.
 - Give the user the URL from stdout. Do not also paste the file contents into the chat.
 - The page live-reloads on every save. After editing the file, do not restart mds.
 - `mds <dir>` serves every markdown file under a directory, with a file tree in the sidebar.
-- For another file, run mds again with its path.
-- Stop a server with `kill <pid>`; the pid is printed when it starts.
+- For another file, run mds again with its path: it joins the sidebar of the same page,
+  and the URL that mds prints points straight at it.
+- `mds --stop` shuts the server down.
 
 If `mds` is not installed, say so instead of guessing at another renderer:
 `go install github.com/melkikh/mds@latest`.

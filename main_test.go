@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,19 +40,30 @@ func fixture(t *testing.T) string {
 	return root
 }
 
-func testServer(t *testing.T, root, entry string) *server {
+func testServer(t *testing.T, dir, entry string) *server {
 	t.Helper()
-	return &server{
-		root:    root,
-		entry:   entry,
-		dirMode: entry == "",
-		depth:   5,
-		theme:   "light",
-		skip:    defaultSkip,
-		launch:  func(string) error { return nil },
-		tmpl:    template.Must(template.ParseFS(assetFS, "assets/page.html")),
-		subs:    map[chan struct{}]struct{}{},
+	target := dir
+	if entry != "" {
+		target = filepath.Join(dir, entry)
 	}
+	return &server{
+		roots:  []*root{newRoot(target, entry == "", "")},
+		depth:  5,
+		theme:  "light",
+		skip:   defaultSkip,
+		launch: func(string) error { return nil },
+		tmpl:   template.Must(template.ParseFS(assetFS, "assets/page.html")),
+		subs:   map[chan struct{}]struct{}{},
+	}
+}
+
+func writeFile(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	full := filepath.Join(dir, name)
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return full
 }
 
 func get(t *testing.T, s *server, url string) (int, string) {
@@ -66,20 +78,20 @@ func TestParseArgs(t *testing.T) {
 		args []string
 		want options
 	}{
-		{nil, options{".", 5, "light", defaultSkip, false}},
-		{[]string{"plan.md"}, options{"plan.md", 5, "light", defaultSkip, false}},
-		{[]string{"-d", "0", "docs"}, options{"docs", 0, "light", defaultSkip, false}},
-		{[]string{"docs", "--depth", "-1", "--theme", "dark"}, options{"docs", -1, "dark", defaultSkip, false}},
-		{[]string{"-s", "target,out"}, options{".", 5, "light", []string{"target", "out"}, false}},
-		{[]string{"-b", "plan.md"}, options{"plan.md", 5, "light", defaultSkip, true}},
-		{[]string{"--background"}, options{".", 5, "light", defaultSkip, true}},
-		{[]string{"-t"}, options{".", 5, "light", defaultSkip, false}},
-		{[]string{"-d", "oops"}, options{".", 5, "light", defaultSkip, false}},
+		{nil, options{".", 5, "light", defaultSkip, false, false}},
+		{[]string{"plan.md"}, options{"plan.md", 5, "light", defaultSkip, false, false}},
+		{[]string{"-d", "0", "docs"}, options{"docs", 0, "light", defaultSkip, false, false}},
+		{[]string{"docs", "--depth", "-1", "--theme", "dark"}, options{"docs", -1, "dark", defaultSkip, false, false}},
+		{[]string{"-s", "target,out"}, options{".", 5, "light", []string{"target", "out"}, false, false}},
+		{[]string{"-b", "plan.md"}, options{"plan.md", 5, "light", defaultSkip, true, false}},
+		{[]string{"--background", "--new"}, options{".", 5, "light", defaultSkip, true, true}},
+		{[]string{"-t"}, options{".", 5, "light", defaultSkip, false, false}},
+		{[]string{"-d", "oops"}, options{".", 5, "light", defaultSkip, false, false}},
 	}
 	for _, c := range cases {
 		got := parseArgs(c.args)
 		if got.target != c.want.target || got.depth != c.want.depth || got.theme != c.want.theme ||
-			!slices.Equal(got.skip, c.want.skip) || got.background != c.want.background {
+			!slices.Equal(got.skip, c.want.skip) || got.background != c.want.background || got.fresh != c.want.fresh {
 			t.Errorf("parseArgs(%q) = %+v, want %+v", c.args, got, c.want)
 		}
 	}
@@ -95,7 +107,7 @@ func TestServeContentDirMode(t *testing.T) {
 		{"/", http.StatusOK, "Root"},
 		{"/", http.StatusOK, `id="burger"`},
 		{"/docs/intro.md", http.StatusOK, "Intro"},
-		{"/docs/intro.md", http.StatusOK, `id="edit" title="Open in editor" data-path="docs/intro.md"`},
+		{"/docs/intro.md", http.StatusOK, `id="edit" title="Open in editor" data-path="/docs/intro.md"`},
 		{"/docs/api/spec.markdown", http.StatusOK, "Spec"},
 		{"/notes.txt", http.StatusOK, "plain"},
 		{"/_static/app.css", http.StatusOK, "--code-bg"},
@@ -161,6 +173,89 @@ func TestServeEdit(t *testing.T) {
 	s.launch = func(string) error { return errors.New("no editor") }
 	if status, _ := get(t, s, "/_edit?path=README.md"); status != http.StatusInternalServerError {
 		t.Errorf("failing editor = %d, want 500", status)
+	}
+}
+
+func TestAddRoot(t *testing.T) {
+	dir := fixture(t)
+	outside := t.TempDir()
+	plan := writeFile(t, outside, "plan.md", "# Plan\n")
+	s := testServer(t, dir, "")
+
+	if page := s.addRoot(filepath.Join(dir, "docs", "intro.md"), false); page != "/docs/intro.md" {
+		t.Errorf("adding a file already in the tree = %q, want /docs/intro.md", page)
+	}
+	if page := s.addRoot(dir, true); page != "/" {
+		t.Errorf("adding the served root = %q, want /", page)
+	}
+	if len(s.roots) != 1 {
+		t.Fatalf("roots = %d, want the served paths to be reused", len(s.roots))
+	}
+	if page := s.addRoot(plan, false); page != "/_r1/plan.md" {
+		t.Fatalf("adding an outside file = %q, want /_r1/plan.md", page)
+	}
+	if page := s.addRoot(plan, false); page != "/_r1/plan.md" || len(s.roots) != 2 {
+		t.Errorf("adding it twice = %q with %d roots, want the same page and 2 roots", page, len(s.roots))
+	}
+	if status, body := get(t, s, "/_r1/plan.md"); status != http.StatusOK || !strings.Contains(body, "Plan") {
+		t.Errorf("GET /_r1/plan.md = %d, want the added file", status)
+	}
+	if status, body := get(t, s, "/_r1"); status != http.StatusOK || !strings.Contains(body, "Plan") {
+		t.Errorf("GET /_r1 = %d, want the entry of that root", status)
+	}
+	if _, body := get(t, s, "/_r1/plan.md"); !strings.Contains(body, `id="burger"`) {
+		t.Error("a second root should bring the sidebar up")
+	}
+	if status, _ := get(t, s, "/_r9/plan.md"); status != http.StatusNotFound {
+		t.Errorf("unknown root prefix = %d, want 404", status)
+	}
+}
+
+func TestServeAdd(t *testing.T) {
+	dir := fixture(t)
+	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
+	s := testServer(t, dir, "")
+	s.url = "http://127.0.0.1:8080"
+	post := func(target string) (int, string) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/_add?path="+url.QueryEscape(target), nil)
+		s.routes().ServeHTTP(recorder, request)
+		return recorder.Code, recorder.Body.String()
+	}
+	if status, body := post(plan); status != http.StatusOK || body != s.url+"/_r1/plan.md" {
+		t.Errorf("POST /_add = %d %q, want the full URL of the added file", status, body)
+	}
+	if status, _ := post("relative.md"); status != http.StatusBadRequest {
+		t.Errorf("relative path = %d, want 400", status)
+	}
+	if status, _ := post(filepath.Join(dir, "missing.md")); status != http.StatusBadRequest {
+		t.Errorf("missing path = %d, want 400", status)
+	}
+	if status, _ := get(t, s, "/_add?path="+plan); status != http.StatusNotFound || len(s.roots) != 2 {
+		t.Errorf("GET /_add = %d with %d roots, want 404 and no root added", status, len(s.roots))
+	}
+}
+
+func TestServeStop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	s := testServer(t, t.TempDir(), "")
+	s.url = "http://127.0.0.1:8080"
+	stopped := make(chan struct{})
+	s.shutdown = func() { close(stopped) }
+	addInstance(s.url)
+	recorder := httptest.NewRecorder()
+	s.routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/_stop", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Errorf("POST /_stop = %d, want 204", recorder.Code)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("/_stop did not shut the server down")
+	}
+	if len(readInstances()) != 0 {
+		t.Error("/_stop left the instance behind in the state file")
 	}
 }
 

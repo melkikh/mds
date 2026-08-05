@@ -90,6 +90,16 @@ func buildTree(files []string) []*node {
 	return root.Children
 }
 
+func prefixPaths(nodes []*node, prefix string) {
+	if prefix == "" {
+		return
+	}
+	for _, n := range nodes {
+		n.Path = prefix + "/" + n.Path
+		prefixPaths(n.Children, prefix)
+	}
+}
+
 func sortNodes(nodes []*node) {
 	slices.SortFunc(nodes, func(a, b *node) int {
 		return cmp.Or(strings.Compare(a.Type, b.Type), strings.Compare(a.Name, b.Name))

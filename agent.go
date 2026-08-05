@@ -10,6 +10,10 @@ import (
 
 const childEnv = "MDS_CHILD"
 
+const reuseHint = `mds was already running, so that path was added to the page above and to its sidebar.
+Show the URL to the user; the page live-reloads on every save. Stop the server: mds --stop
+`
+
 var agentEnv = []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "OPENCODE_BIN_PATH", "CURSOR_TRACE_ID", "AIDER_MODEL"}
 
 func detectAgent() string {
@@ -56,12 +60,12 @@ func detach(agent string) {
 		fmt.Fprintf(os.Stderr, "mds: serving in the background, pid %d\n", child.Process.Pid)
 		return
 	}
-	fmt.Printf(`mds serves that file in the background (pid %d) and does not block.
+	fmt.Printf(`mds serves that path in the background (pid %d) and does not block.
 The page live-reloads on every save, so there is no need to restart it.
 Show the URL above to the user instead of pasting the file into the chat.
-Another file: run mds again with its path. Stop it: kill %d
-Install the slash command: mds --skill > ~/.claude/skills/mds/SKILL.md
-`, child.Process.Pid, child.Process.Pid)
+Another file: run mds again with its path, it lands in the sidebar of the same page.
+Stop it: mds --stop. Install the slash command: mds --skill > ~/.claude/skills/mds/SKILL.md
+`, child.Process.Pid)
 }
 
 func printSkill() {

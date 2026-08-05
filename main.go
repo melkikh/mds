@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,28 +35,19 @@ usage:
   -t, --theme NAME   initial theme, light or dark (default "light")
   -s, --skip NAMES   comma-separated directory names to skip (default "node_modules,vendor,dist,build,target")
   -b, --background   serve in a detached process, print the URL and exit
+      --new          start a separate server instead of reusing the running one
+      --stop         stop the running server
       --skill        print a skill file teaching a coding agent to use mds
   -h, --help         show this help
 
   MDS_EDITOR         command the pencil button runs, e.g. "code -g" (default: system opener)
 
-Running under a coding agent (Claude Code, Codex, ...) implies --background.
+A second mds adds its path to the server that is already running and prints the URL of
+that page; the sidebar of the open tab picks it up. Running under a coding agent
+(Claude Code, Codex, ...) implies --background.
 `
 
 var defaultSkip = []string{"node_modules", "vendor", "dist", "build", "target"}
-
-type server struct {
-	root    string
-	entry   string
-	dirMode bool
-	depth   int
-	theme   string
-	skip    []string
-	launch  func(string) error
-	tmpl    *template.Template
-	mu      sync.Mutex
-	subs    map[chan struct{}]struct{}
-}
 
 type options struct {
 	target     string
@@ -63,14 +55,32 @@ type options struct {
 	theme      string
 	skip       []string
 	background bool
+	fresh      bool
+}
+
+type root struct {
+	dir    string
+	entry  string
+	prefix string
+}
+
+type server struct {
+	roots    []*root
+	url      string
+	depth    int
+	theme    string
+	skip     []string
+	launch   func(string) error
+	shutdown func()
+	tmpl     *template.Template
+	watcher  *fsnotify.Watcher
+	rootsMu  sync.RWMutex
+	mu       sync.Mutex
+	subs     map[chan struct{}]struct{}
 }
 
 func main() {
 	opts := parseArgs(os.Args[1:])
-	if agent := detectAgent(); os.Getenv(childEnv) == "" && (opts.background || agent != "") {
-		detach(agent)
-		return
-	}
 	abs, err := filepath.Abs(opts.target)
 	if err != nil {
 		fatal(err)
@@ -79,8 +89,22 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	agent := detectAgent()
+	if !opts.fresh {
+		if page, ok := addToRunning(abs); ok {
+			fmt.Println(page)
+			if agent != "" {
+				fmt.Print(reuseHint)
+			}
+			return
+		}
+	}
+	if os.Getenv(childEnv) == "" && (opts.background || agent != "") {
+		detach(agent)
+		return
+	}
 	s := &server{
-		root:   abs,
+		roots:  []*root{newRoot(abs, info.IsDir(), "")},
 		depth:  opts.depth,
 		theme:  opts.theme,
 		skip:   opts.skip,
@@ -88,14 +112,17 @@ func main() {
 		tmpl:   template.Must(template.ParseFS(assetFS, "assets/page.html")),
 		subs:   map[chan struct{}]struct{}{},
 	}
-	if s.dirMode = info.IsDir(); !s.dirMode {
-		s.root, s.entry = filepath.Dir(abs), filepath.Base(abs)
-	}
-	listener, url := listen()
-	fmt.Println(url)
-	_ = openExternal(url)
+	listener, serverURL := listen()
+	httpServer := &http.Server{Handler: s.routes()}
+	s.url, s.shutdown = serverURL, func() { _ = httpServer.Close() }
+	fmt.Println(serverURL)
+	_ = openExternal(serverURL)
+	addInstance(serverURL)
 	go s.watch()
-	fatal(http.Serve(listener, s.routes()))
+	if err := httpServer.Serve(listener); err != http.ErrServerClosed {
+		fatal(err)
+	}
+	dropInstance(serverURL)
 }
 
 func fatal(err error) {
@@ -117,8 +144,13 @@ func parseArgs(args []string) options {
 		case "--skill":
 			printSkill()
 			os.Exit(0)
+		case "--stop":
+			stopRunning()
+			os.Exit(0)
 		case "-b", "--background":
 			opts.background = true
+		case "--new":
+			opts.fresh = true
 		case "-d", "--depth":
 			if n, err := strconv.Atoi(value); err == nil {
 				opts.depth = n
@@ -169,6 +201,20 @@ func openInEditor(target string) error {
 	return exec.Command(editor[0], append(editor[1:], target)...).Start()
 }
 
+func newRoot(abs string, isDir bool, prefix string) *root {
+	if isDir {
+		return &root{dir: abs, prefix: prefix}
+	}
+	return &root{dir: filepath.Dir(abs), entry: filepath.Base(abs), prefix: prefix}
+}
+
+func (rt *root) page(rel string) string {
+	if rt.prefix == "" {
+		return "/" + rel
+	}
+	return strings.TrimSuffix("/"+rt.prefix+"/"+rel, "/")
+}
+
 func (s *server) routes() http.Handler {
 	static, _ := fs.Sub(assetFS, "assets")
 	mux := http.NewServeMux()
@@ -176,22 +222,37 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /_events", s.serveEvents)
 	mux.HandleFunc("GET /_tree", s.serveTree)
 	mux.HandleFunc("GET /_edit", s.serveEdit)
+	mux.HandleFunc("POST /_add", s.serveAdd)
+	mux.HandleFunc("POST /_stop", s.serveStop)
 	mux.HandleFunc("GET /", s.serveContent)
 	return mux
 }
 
+func (s *server) resolve(target string) (*root, string) {
+	s.rootsMu.RLock()
+	defer s.rootsMu.RUnlock()
+	rel := strings.TrimPrefix(path.Clean(target), "/")
+	head, rest, _ := strings.Cut(rel, "/")
+	for _, rt := range s.roots[1:] {
+		if head == rt.prefix {
+			return rt, rest
+		}
+	}
+	return s.roots[0], rel
+}
+
 func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
-	rel := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	rt, rel := s.resolve(r.URL.Path)
 	if rel == "." || rel == "" {
-		if rel = s.entry; s.dirMode {
-			rel = s.indexFile()
+		if rel = rt.entry; rel == "" {
+			rel = indexFile(rt.dir)
 		}
 	}
 	if rel == "" {
-		s.renderPage(w, http.StatusOK, filepath.Base(s.root), "", "")
+		s.renderPage(w, http.StatusOK, filepath.Base(rt.dir), "", "")
 		return
 	}
-	full := filepath.Join(s.root, filepath.FromSlash(rel))
+	full := filepath.Join(rt.dir, filepath.FromSlash(rel))
 	if !isMarkdown(rel) {
 		http.ServeFile(w, r, full)
 		return
@@ -202,40 +263,62 @@ func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
 		s.renderPage(w, http.StatusNotFound, "404", "", template.HTML(body))
 		return
 	}
-	s.renderPage(w, http.StatusOK, path.Base(rel), rel, render(source))
+	s.renderPage(w, http.StatusOK, path.Base(rel), rt.page(rel), render(source))
 }
 
-func (s *server) indexFile() string {
+func indexFile(dir string) string {
 	for _, name := range []string{"README.md", "readme.md", "index.md"} {
-		if _, err := os.Stat(filepath.Join(s.root, name)); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			return name
 		}
 	}
 	return ""
 }
 
-func (s *server) renderPage(w http.ResponseWriter, status int, title, rel string, content template.HTML) {
+func (s *server) renderPage(w http.ResponseWriter, status int, title, page string, content template.HTML) {
+	s.rootsMu.RLock()
+	tree := len(s.roots) > 1 || s.roots[0].entry == ""
+	s.rootsMu.RUnlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = s.tmpl.Execute(w, map[string]any{
-		"Theme": s.theme, "Title": title, "Path": rel, "DirMode": s.dirMode, "Content": content,
+		"Theme": s.theme, "Title": title, "Path": page, "Tree": tree, "Content": content,
 	})
 }
 
 func (s *server) serveTree(w http.ResponseWriter, r *http.Request) {
-	_, files := scan(s.root, s.depth, s.skip)
+	s.rootsMu.RLock()
+	roots := slices.Clone(s.roots)
+	s.rootsMu.RUnlock()
+	nodes := []*node{}
+	for _, rt := range roots {
+		branch := buildTree(s.rootFiles(rt))
+		prefixPaths(branch, rt.prefix)
+		if rt.prefix != "" && rt.entry == "" {
+			branch = []*node{{Type: "dir", Name: filepath.Base(rt.dir), Path: rt.prefix, Children: branch}}
+		}
+		nodes = append(nodes, branch...)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"root": filepath.Base(s.root), "nodes": buildTree(files)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"root": filepath.Base(roots[0].dir), "nodes": nodes})
+}
+
+func (s *server) rootFiles(rt *root) []string {
+	if rt.entry != "" {
+		return []string{rt.entry}
+	}
+	_, files := scan(rt.dir, s.depth, s.skip)
+	return files
 }
 
 func (s *server) serveEdit(w http.ResponseWriter, r *http.Request) {
-	rel := strings.TrimPrefix(path.Clean(r.URL.Query().Get("path")), "/")
+	rt, rel := s.resolve(r.URL.Query().Get("path"))
 	if !isMarkdown(rel) || strings.HasPrefix(rel, "..") {
 		http.Error(w, "not a markdown file", http.StatusBadRequest)
 		return
 	}
-	full := filepath.Join(s.root, filepath.FromSlash(rel))
+	full := filepath.Join(rt.dir, filepath.FromSlash(rel))
 	if _, err := os.Stat(full); err != nil {
 		http.Error(w, "no such file", http.StatusNotFound)
 		return
@@ -245,6 +328,55 @@ func (s *server) serveEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) serveAdd(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Query().Get("path")
+	info, err := os.Stat(target)
+	if !filepath.IsAbs(target) || err != nil {
+		http.Error(w, "no such path", http.StatusBadRequest)
+		return
+	}
+	page := s.addRoot(target, info.IsDir())
+	s.broadcast()
+	fmt.Fprint(w, s.url+page)
+}
+
+func (s *server) addRoot(abs string, isDir bool) string {
+	s.rootsMu.Lock()
+	defer s.rootsMu.Unlock()
+	for _, rt := range s.roots {
+		if rel, ok := s.served(rt, abs); ok {
+			return rt.page(rel)
+		}
+	}
+	rt := newRoot(abs, isDir, fmt.Sprintf("_r%d", len(s.roots)))
+	s.roots = append(s.roots, rt)
+	s.addWatches(rt)
+	return rt.page(rt.entry)
+}
+
+func (s *server) served(rt *root, abs string) (string, bool) {
+	if rt.entry != "" {
+		return rt.entry, abs == filepath.Join(rt.dir, rt.entry)
+	}
+	if abs == rt.dir {
+		return "", true
+	}
+	rel, err := filepath.Rel(rt.dir, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	slash := filepath.ToSlash(rel)
+	return slash, slices.Contains(s.rootFiles(rt), slash)
+}
+
+func (s *server) serveStop(w http.ResponseWriter, r *http.Request) {
+	dropInstance(s.url)
+	w.WriteHeader(http.StatusNoContent)
+	if s.shutdown != nil {
+		go s.shutdown()
+	}
 }
 
 func (s *server) serveEvents(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +417,10 @@ func (s *server) watch() {
 		return
 	}
 	defer watcher.Close()
-	s.addWatches(watcher)
+	s.rootsMu.Lock()
+	s.watcher = watcher
+	s.watchRoots()
+	s.rootsMu.Unlock()
 	debounce := time.AfterFunc(time.Hour, s.broadcast)
 	debounce.Stop()
 	for {
@@ -294,8 +429,10 @@ func (s *server) watch() {
 			if !ok {
 				return
 			}
-			if info, err := os.Stat(event.Name); s.dirMode && err == nil && info.IsDir() {
-				s.addWatches(watcher)
+			if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+				s.rootsMu.RLock()
+				s.watchRoots()
+				s.rootsMu.RUnlock()
 			} else if !s.watched(event.Name) {
 				continue
 			}
@@ -305,20 +442,40 @@ func (s *server) watch() {
 	}
 }
 
-func (s *server) watched(name string) bool {
-	if s.dirMode {
-		return isMarkdown(name)
+func (s *server) watchRoots() {
+	for _, rt := range s.roots {
+		s.addWatches(rt)
 	}
-	return name == filepath.Join(s.root, s.entry)
 }
 
-func (s *server) addWatches(watcher *fsnotify.Watcher) {
-	if !s.dirMode {
-		_ = watcher.Add(s.root)
+func (s *server) addWatches(rt *root) {
+	if s.watcher == nil {
 		return
 	}
-	dirs, _ := scan(s.root, s.depth, s.skip)
-	for _, dir := range dirs {
-		_ = watcher.Add(dir)
+	if rt.entry != "" {
+		_ = s.watcher.Add(rt.dir)
+		return
 	}
+	dirs, _ := scan(rt.dir, s.depth, s.skip)
+	for _, dir := range dirs {
+		_ = s.watcher.Add(dir)
+	}
+}
+
+func (s *server) watched(name string) bool {
+	if !isMarkdown(name) {
+		return false
+	}
+	s.rootsMu.RLock()
+	defer s.rootsMu.RUnlock()
+	for _, rt := range s.roots {
+		if rt.entry == "" {
+			if strings.HasPrefix(name, rt.dir+string(os.PathSeparator)) {
+				return true
+			}
+		} else if name == filepath.Join(rt.dir, rt.entry) {
+			return true
+		}
+	}
+	return false
 }
