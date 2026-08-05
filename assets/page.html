@@ -1,0 +1,17 @@
+<!doctype html>
+<html data-theme="{{.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="/_static/app.css">
+<script>document.documentElement.dataset.theme = localStorage.mdsTheme || "{{.Theme}}"</script>
+</head>
+<body>
+<button id="theme-toggle" title="Toggle theme">&#9686;</button>
+{{if .DirMode}}<button id="burger" title="Files">&#8801;</button><aside id="tree" hidden></aside>{{end}}
+<main>{{.Content}}</main>
+<script src="/_static/mermaid.min.js"></script>
+<script src="/_static/app.js"></script>
+</body>
+</html>
