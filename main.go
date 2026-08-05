@@ -33,9 +33,13 @@ usage:
   -d, --depth N      max directory depth, 0 = root only, -1 = unlimited (default 5)
   -t, --theme NAME   initial theme, light or dark (default "light")
   -s, --skip NAMES   comma-separated directory names to skip (default "node_modules,vendor,dist,build,target")
+  -b, --background   serve in a detached process, print the URL and exit
+      --skill        print a skill file teaching a coding agent to use mds
   -h, --help         show this help
 
   MDS_EDITOR         command the pencil button runs, e.g. "code -g" (default: system opener)
+
+Running under a coding agent (Claude Code, Codex, ...) implies --background.
 `
 
 var defaultSkip = []string{"node_modules", "vendor", "dist", "build", "target"}
@@ -53,9 +57,21 @@ type server struct {
 	subs    map[chan struct{}]struct{}
 }
 
+type options struct {
+	target     string
+	depth      int
+	theme      string
+	skip       []string
+	background bool
+}
+
 func main() {
-	target, depth, theme, skip := parseArgs(os.Args[1:])
-	abs, err := filepath.Abs(target)
+	opts := parseArgs(os.Args[1:])
+	if agent := detectAgent(); os.Getenv(childEnv) == "" && (opts.background || agent != "") {
+		detach(agent)
+		return
+	}
+	abs, err := filepath.Abs(opts.target)
 	if err != nil {
 		fatal(err)
 	}
@@ -65,9 +81,9 @@ func main() {
 	}
 	s := &server{
 		root:   abs,
-		depth:  depth,
-		theme:  theme,
-		skip:   skip,
+		depth:  opts.depth,
+		theme:  opts.theme,
+		skip:   opts.skip,
 		launch: openInEditor,
 		tmpl:   template.Must(template.ParseFS(assetFS, "assets/page.html")),
 		subs:   map[chan struct{}]struct{}{},
@@ -87,8 +103,8 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func parseArgs(args []string) (string, int, string, []string) {
-	target, depth, theme, skip := ".", 5, "light", defaultSkip
+func parseArgs(args []string) options {
+	opts := options{target: ".", depth: 5, theme: "light", skip: defaultSkip}
 	for i := 0; i < len(args); i++ {
 		value := ""
 		if i+1 < len(args) {
@@ -98,24 +114,29 @@ func parseArgs(args []string) (string, int, string, []string) {
 		case "-h", "--help":
 			fmt.Print(usage)
 			os.Exit(0)
+		case "--skill":
+			printSkill()
+			os.Exit(0)
+		case "-b", "--background":
+			opts.background = true
 		case "-d", "--depth":
 			if n, err := strconv.Atoi(value); err == nil {
-				depth = n
+				opts.depth = n
 			}
 			i++
 		case "-t", "--theme":
 			if value == "dark" {
-				theme = "dark"
+				opts.theme = "dark"
 			}
 			i++
 		case "-s", "--skip":
-			skip = strings.Split(value, ",")
+			opts.skip = strings.Split(value, ",")
 			i++
 		default:
-			target = args[i]
+			opts.target = args[i]
 		}
 	}
-	return target, depth, theme, skip
+	return opts
 }
 
 func listen() (net.Listener, string) {

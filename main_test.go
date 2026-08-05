@@ -63,25 +63,24 @@ func get(t *testing.T, s *server, url string) (int, string) {
 
 func TestParseArgs(t *testing.T) {
 	cases := []struct {
-		args  []string
-		path  string
-		depth int
-		theme string
-		skip  []string
+		args []string
+		want options
 	}{
-		{nil, ".", 5, "light", defaultSkip},
-		{[]string{"plan.md"}, "plan.md", 5, "light", defaultSkip},
-		{[]string{"-d", "0", "docs"}, "docs", 0, "light", defaultSkip},
-		{[]string{"docs", "--depth", "-1", "--theme", "dark"}, "docs", -1, "dark", defaultSkip},
-		{[]string{"-s", "target,out"}, ".", 5, "light", []string{"target", "out"}},
-		{[]string{"-t"}, ".", 5, "light", defaultSkip},
-		{[]string{"-d", "oops"}, ".", 5, "light", defaultSkip},
+		{nil, options{".", 5, "light", defaultSkip, false}},
+		{[]string{"plan.md"}, options{"plan.md", 5, "light", defaultSkip, false}},
+		{[]string{"-d", "0", "docs"}, options{"docs", 0, "light", defaultSkip, false}},
+		{[]string{"docs", "--depth", "-1", "--theme", "dark"}, options{"docs", -1, "dark", defaultSkip, false}},
+		{[]string{"-s", "target,out"}, options{".", 5, "light", []string{"target", "out"}, false}},
+		{[]string{"-b", "plan.md"}, options{"plan.md", 5, "light", defaultSkip, true}},
+		{[]string{"--background"}, options{".", 5, "light", defaultSkip, true}},
+		{[]string{"-t"}, options{".", 5, "light", defaultSkip, false}},
+		{[]string{"-d", "oops"}, options{".", 5, "light", defaultSkip, false}},
 	}
 	for _, c := range cases {
-		path, depth, theme, skip := parseArgs(c.args)
-		if path != c.path || depth != c.depth || theme != c.theme || !slices.Equal(skip, c.skip) {
-			t.Errorf("parseArgs(%q) = %q %d %q %q, want %q %d %q %q",
-				c.args, path, depth, theme, skip, c.path, c.depth, c.theme, c.skip)
+		got := parseArgs(c.args)
+		if got.target != c.want.target || got.depth != c.want.depth || got.theme != c.want.theme ||
+			!slices.Equal(got.skip, c.want.skip) || got.background != c.want.background {
+			t.Errorf("parseArgs(%q) = %+v, want %+v", c.args, got, c.want)
 		}
 	}
 }
