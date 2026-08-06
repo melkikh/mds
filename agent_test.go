@@ -78,6 +78,9 @@ func TestDetachedServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	printed, _ := io.ReadAll(stdout)
+	if process, err := os.FindProcess(agentHintPid(t, string(printed))); err == nil {
+		t.Cleanup(func() { _ = process.Kill() })
+	}
 	drained := make(chan []byte, 1)
 	go func() {
 		leftover, _ := io.ReadAll(stderr)
@@ -104,13 +107,6 @@ func TestDetachedServer(t *testing.T) {
 	if !strings.Contains(string(printed), "does not block") {
 		t.Errorf("agent hint missing from stdout:\n%s", printed)
 	}
-	pid := agentHintPid(t, string(printed))
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer process.Kill()
-
 	response, err := http.Get(url + "/docs/intro.md")
 	if err != nil {
 		t.Fatalf("detached server unreachable: %v", err)

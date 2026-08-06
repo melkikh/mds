@@ -5,73 +5,104 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 )
 
 type instance struct {
-	URL   string `json:"url"`
-	Token string `json:"token"`
+	port  string
+	token string
 }
 
-var talk = &http.Client{Timeout: 500 * time.Millisecond}
+var talk = &http.Client{Timeout: 2 * time.Second}
 
-func instancesFile() string {
+func (in instance) origin() string {
+	return "http://127.0.0.1:" + in.port
+}
+
+func instancesDir() string {
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(cache, "mds", "instances.json")
+	return filepath.Join(cache, "mds", "instances")
 }
 
 func readInstances() []instance {
-	var running []instance
-	body, err := os.ReadFile(instancesFile())
-	if err != nil || json.Unmarshal(body, &running) != nil {
+	dir := instancesDir()
+	if dir == "" {
 		return nil
+	}
+	adoptLegacy(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	running := []instance{}
+	for _, entry := range entries {
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+		token, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		running = append(running, instance{port: entry.Name(), token: string(token)})
 	}
 	return running
 }
 
-func writeInstances(running []instance) {
-	path := instancesFile()
-	body, err := json.Marshal(running)
-	if path == "" || err != nil || os.MkdirAll(filepath.Dir(path), 0o700) != nil {
+func adoptLegacy(dir string) {
+	legacy := filepath.Join(filepath.Dir(dir), "instances.json")
+	body, err := os.ReadFile(legacy)
+	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, body, 0o600)
+	var old []struct{ URL, Token string }
+	if json.Unmarshal(body, &old) == nil {
+		for _, running := range old {
+			if _, port, err := net.SplitHostPort(strings.TrimPrefix(running.URL, "http://")); err == nil {
+				addInstance(port, running.Token)
+			}
+		}
+	}
+	_ = os.Remove(legacy)
 }
 
-func addInstance(serverURL, token string) {
-	writeInstances(append(readInstances(), instance{URL: serverURL, Token: token}))
+func addInstance(port, token string) {
+	dir := instancesDir()
+	if dir == "" || os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, port), []byte(token), 0o600)
 }
 
-func dropInstance(serverURL string) {
-	writeInstances(slices.DeleteFunc(readInstances(), func(running instance) bool {
-		return running.URL == serverURL
-	}))
+func dropInstance(port string) {
+	if dir := instancesDir(); dir != "" {
+		_ = os.Remove(filepath.Join(dir, port))
+	}
 }
 
 func call(running instance, path string) (*http.Response, error) {
-	if parsed, err := url.Parse(running.URL); err != nil || !loopback(parsed.Host) {
-		return nil, errors.New("not a loopback server: " + running.URL)
-	}
-	request, err := http.NewRequest(http.MethodPost, running.URL+path, nil)
+	request, err := http.NewRequest(http.MethodPost, running.origin()+path, nil)
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set(tokenHeader, running.Token)
+	request.Header.Set(tokenHeader, running.token)
 	return talk.Do(request)
 }
 
 func postAdd(running instance, target string) (page string, alive, added bool) {
 	response, err := call(running, "/_add?path="+url.QueryEscape(target))
 	if err != nil {
-		return "", false, false
+		return "", !errors.Is(err, syscall.ECONNREFUSED), false
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
@@ -82,21 +113,17 @@ func postAdd(running instance, target string) (page string, alive, added bool) {
 }
 
 func addToRunning(target string) (string, bool) {
-	alive, page, found := []instance{}, "", false
 	for _, running := range readInstances() {
-		if found {
-			alive = append(alive, running)
+		page, alive, added := postAdd(running, target)
+		if !alive {
+			dropInstance(running.port)
 			continue
 		}
-		body, answered, added := postAdd(running, target)
-		if !answered {
-			continue
+		if added {
+			return page, true
 		}
-		alive = append(alive, running)
-		page, found = body, added
 	}
-	writeInstances(alive)
-	return page, found
+	return "", false
 }
 
 func stopRunning() {
@@ -105,8 +132,8 @@ func stopRunning() {
 		if _, err := call(running, "/_stop"); err == nil {
 			stopped++
 		}
+		dropInstance(running.port)
 	}
-	writeInstances(nil)
 	if stopped == 0 {
 		fmt.Println("mds: nothing to stop")
 		return

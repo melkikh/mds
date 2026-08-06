@@ -45,6 +45,8 @@ that page; the sidebar of the open tab picks it up. Running under a coding agent
 (Claude Code, Codex, ...) implies --background.
 `
 
+const sharedPort = "8080"
+
 var defaultSkip = []string{"node_modules", "vendor", "dist", "build", "target"}
 
 type options struct {
@@ -72,10 +74,7 @@ func main() {
 	agent := detectAgent()
 	if !opts.fresh {
 		if page, ok := addToRunning(abs); ok {
-			fmt.Println(page)
-			if agent != "" {
-				fmt.Print(reuseHint)
-			}
+			announce(page, agent)
 			return
 		}
 	}
@@ -83,20 +82,47 @@ func main() {
 		detach(agent)
 		return
 	}
-	s := newServer(newRoot(abs, info.IsDir(), ""), opts)
-	listener, serverURL := listen()
-	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
-	s.url, s.shutdown = serverURL, func() { _ = httpServer.Close() }
-	fmt.Println(serverURL)
-	if !opts.noOpen {
-		_ = openExternal(serverURL)
+	listener, port, claimed := listen()
+	if !claimed && !opts.fresh {
+		if page, ok := joinHolder(abs); ok {
+			_ = listener.Close()
+			announce(page, agent)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort, port)
 	}
-	addInstance(serverURL, s.token)
+	s := newServer(newRoot(abs, info.IsDir(), ""), opts)
+	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
+	s.port, s.shutdown = port, func() { _ = httpServer.Close() }
+	addInstance(port, s.token)
+	fmt.Println(s.origin())
+	if !opts.noOpen {
+		_ = openExternal(s.origin())
+	}
 	go s.watch()
 	if err := httpServer.Serve(listener); err != http.ErrServerClosed {
 		fatal(err)
 	}
-	dropInstance(serverURL)
+	dropInstance(port)
+}
+
+func announce(page, agent string) {
+	fmt.Println(page)
+	if agent != "" {
+		fmt.Print(reuseHint)
+	}
+}
+
+func joinHolder(target string) (string, bool) {
+	for attempt := range 5 {
+		if attempt > 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if page, ok := addToRunning(target); ok {
+			return page, true
+		}
+	}
+	return "", false
 }
 
 func fatal(err error) {
@@ -145,15 +171,19 @@ func parseArgs(args []string) (options, error) {
 	return opts, nil
 }
 
-func listen() (net.Listener, string) {
-	l, err := net.Listen("tcp", "127.0.0.1:8080")
-	if err != nil {
-		l, err = net.Listen("tcp", "127.0.0.1:0")
+func listen() (net.Listener, string, bool) {
+	if l, err := net.Listen("tcp", "127.0.0.1:"+sharedPort); err == nil {
+		return l, sharedPort, true
 	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fatal(err)
 	}
-	return l, "http://" + l.Addr().String()
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		fatal(err)
+	}
+	return l, port, false
 }
 
 func openExternal(target string) error {

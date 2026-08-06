@@ -546,11 +546,11 @@ func TestServeAdd(t *testing.T) {
 	dir := fixture(t)
 	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
 	s := testServer(t, dir, "")
-	s.url = "http://127.0.0.1:8080"
+	s.port = "8080"
 	add := func(target string) (int, string) {
 		return post(t, s, "/_add?path="+url.QueryEscape(target))
 	}
-	if status, body := add(plan); status != http.StatusOK || body != s.url+"/_r1/plan.md" {
+	if status, body := add(plan); status != http.StatusOK || body != s.origin()+"/_r1/plan.md" {
 		t.Errorf("POST /_add = %d %q, want the full URL of the added file", status, body)
 	}
 	if status, _ := add("relative.md"); status != http.StatusBadRequest {
@@ -568,10 +568,10 @@ func TestServeStop(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	s := testServer(t, t.TempDir(), "")
-	s.url = "http://127.0.0.1:8080"
+	s.port = "8080"
 	stopped := make(chan struct{})
 	s.shutdown = func() { close(stopped) }
-	addInstance(s.url, s.token)
+	addInstance(s.port, s.token)
 	if status, _ := post(t, s, "/_stop"); status != http.StatusNoContent {
 		t.Errorf("POST /_stop = %d, want 204", status)
 	}

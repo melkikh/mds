@@ -63,7 +63,7 @@ type tree struct {
 type server struct {
 	roots    []*root
 	nextRoot int
-	url      string
+	port     string
 	depth    int
 	skip     []string
 	token    string
@@ -96,6 +96,10 @@ func newServer(first *root, opts options) *server {
 		trees:    map[string]*tree{},
 		subs:     map[chan struct{}]struct{}{},
 	}
+}
+
+func (s *server) origin() string {
+	return "http://127.0.0.1:" + s.port
 }
 
 func newRoot(abs string, isDir bool, prefix string) *root {
@@ -417,7 +421,7 @@ func (s *server) serveAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	page := s.addRoot(target, info.IsDir())
 	s.broadcast()
-	fmt.Fprint(w, s.url+page)
+	fmt.Fprint(w, s.origin()+page)
 }
 
 func (s *server) addRoot(abs string, isDir bool) string {
@@ -473,8 +477,9 @@ func (s *server) dropRoot(prefix string) bool {
 }
 
 func (s *server) serveStop(w http.ResponseWriter, r *http.Request) {
-	dropInstance(s.url)
+	dropInstance(s.port)
 	w.WriteHeader(http.StatusNoContent)
+	_ = http.NewResponseController(w).Flush()
 	if s.shutdown != nil {
 		go s.shutdown()
 	}
