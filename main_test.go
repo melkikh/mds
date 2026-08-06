@@ -205,6 +205,22 @@ func TestOpenInEditorKeepsQuotedPathWhole(t *testing.T) {
 	}
 }
 
+func TestFavicon(t *testing.T) {
+	s := testServer(t, fixture(t), "")
+	if _, body := get(t, s, "/"); !strings.Contains(body, `rel="icon" href="/_static/favicon.svg"`) {
+		t.Error("the page does not point at the favicon, so browsers will probe /favicon.ico instead")
+	}
+	status, icon := get(t, s, "/_static/favicon.svg")
+	if status != http.StatusOK {
+		t.Fatalf("GET /_static/favicon.svg = %d", status)
+	}
+	for _, want := range []string{"viewBox=\"0 0 64 64\"", ">.MD<", "textLength="} {
+		if !strings.Contains(icon, want) {
+			t.Errorf("favicon missing %q", want)
+		}
+	}
+}
+
 func TestMermaidLoadsOnlyWhereItIsUsed(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "plain.md", "# Plain\n\n```go\nfunc main() {}\n```\n")

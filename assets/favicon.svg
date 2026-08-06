@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<style>@media(prefers-color-scheme:dark){rect{fill:#fff}text{fill:#000}}</style>
+<rect width="64" height="64" rx="12" fill="#000"/>
+<text x="32" y="59" fill="#fff" font-family="system-ui,sans-serif" font-size="76" font-weight="700"
+      text-anchor="middle" textLength="62" lengthAdjust="spacingAndGlyphs">.MD</text>
+</svg>

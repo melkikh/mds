@@ -1,17 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -40,7 +37,7 @@ func readInstances() []instance {
 	if dir == "" {
 		return nil
 	}
-	adoptLegacy(dir)
+	_ = os.Remove(filepath.Join(filepath.Dir(dir), "instances.json"))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -57,23 +54,6 @@ func readInstances() []instance {
 		running = append(running, instance{port: entry.Name(), token: string(token)})
 	}
 	return running
-}
-
-func adoptLegacy(dir string) {
-	legacy := filepath.Join(filepath.Dir(dir), "instances.json")
-	body, err := os.ReadFile(legacy)
-	if err != nil {
-		return
-	}
-	var old []struct{ URL, Token string }
-	if json.Unmarshal(body, &old) == nil {
-		for _, running := range old {
-			if _, port, err := net.SplitHostPort(strings.TrimPrefix(running.URL, "http://")); err == nil {
-				addInstance(port, running.Token)
-			}
-		}
-	}
-	_ = os.Remove(legacy)
 }
 
 func addInstance(port, token string) {

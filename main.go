@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -206,23 +207,18 @@ func openInEditor(target string) error {
 }
 
 func splitCommand(command string) []string {
-	parts, quoted := []string{}, false
-	var word strings.Builder
+	var flat strings.Builder
+	quoted := false
 	for _, r := range command {
 		switch {
 		case r == '"':
 			quoted = !quoted
 		case !quoted && unicode.IsSpace(r):
-			if word.Len() > 0 {
-				parts = append(parts, word.String())
-				word.Reset()
-			}
+			flat.WriteRune(0)
 		default:
-			word.WriteRune(r)
+			flat.WriteRune(r)
 		}
 	}
-	if word.Len() > 0 {
-		parts = append(parts, word.String())
-	}
-	return parts
+	return slices.DeleteFunc(strings.Split(flat.String(), "\x00"),
+		func(part string) bool { return part == "" })
 }

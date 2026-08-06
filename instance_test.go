@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -85,11 +84,11 @@ func TestInstanceStateIgnoresJunk(t *testing.T) {
 	}
 }
 
-func TestLegacyStateIsAdoptedOnAnyRun(t *testing.T) {
+func TestLegacyStateIsRemovedOnAnyRun(t *testing.T) {
 	isolateCache(t)
 	addInstance("9999", "token")
 	legacy := filepath.Join(filepath.Dir(instancesDir()), "instances.json")
-	body := `[{"url":"http://127.0.0.1:53800","token":"carried-over"},{"url":"nonsense","token":"x"}]`
+	body := `[{"url":"http://127.0.0.1:53800","token":"leaked"}]`
 	if err := os.WriteFile(legacy, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -98,16 +97,8 @@ func TestLegacyStateIsAdoptedOnAnyRun(t *testing.T) {
 		t.Error("the pre-0.2 state file still sits there with its tokens at 0644, " +
 			"even though a run that only joins never calls addInstance")
 	}
-	adopted := slices.IndexFunc(running, func(in instance) bool { return in.port == "53800" })
-	if adopted < 0 {
-		t.Fatalf("readInstances() = %+v, want the server from the old file carried over, "+
-			"or upgrading orphans whatever was already running", running)
-	}
-	if running[adopted].token != "carried-over" {
-		t.Errorf("token = %q, want it kept so --stop can still reach that server", running[adopted].token)
-	}
-	if info, err := os.Stat(filepath.Join(instancesDir(), "53800")); err != nil || info.Mode().Perm() != 0o600 {
-		t.Error("the carried-over token did not land in a 0600 file")
+	if len(running) != 1 || running[0].port != "9999" {
+		t.Errorf("readInstances() = %+v, want only the new-format entry", running)
 	}
 }
 
