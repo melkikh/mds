@@ -25,7 +25,7 @@ guard:
 	@test -z "$$(git status --porcelain)" || { echo "working tree is dirty:"; git status --short; exit 1; }
 	@test "$$(git rev-parse --abbrev-ref HEAD)" = master || { echo "not on master"; exit 1; }
 	@git fetch -q origin
-	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/master)" || { echo "master and origin/master differ"; exit 1; }
+	@git merge-base --is-ancestor origin/master HEAD || { echo "master is behind origin/master or has diverged from it"; exit 1; }
 	@if git rev-parse -q --verify refs/tags/$(VERSION) >/dev/null; then echo "tag $(VERSION) already exists"; exit 1; fi
 
 publish: guard check
