@@ -2,7 +2,11 @@ MODULE  := $(shell go list -m)
 LATEST  := $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
 VERSION ?= $(shell echo $(LATEST) | awk -F. -v OFS=. '{$$NF++; print}')
 
-.PHONY: build test check guard publish install clean
+.PHONY: all build test check guard publish install clean
+.NOTPARALLEL:
+.DEFAULT_GOAL := build
+
+all: build publish
 
 build:
 	go build -o mds .
