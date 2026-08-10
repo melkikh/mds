@@ -41,7 +41,7 @@ if (edit) {
 
 const content = document.querySelector('main')
 
-content.querySelectorAll('pre:not(.mermaid)').forEach(pre => {
+content.querySelectorAll('pre:not(.mermaid):not(.frontmatter)').forEach(pre => {
   const block = document.createElement('div')
   const button = document.createElement('button')
   button.textContent = 'copy'

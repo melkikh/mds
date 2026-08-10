@@ -56,29 +56,10 @@ func render(source []byte) (template.HTML, bool) {
 }
 
 func renderFrontmatter(block string) string {
-	escape, rows := template.HTMLEscapeString, []string{}
-	for _, line := range strings.Split(block, "\n") {
-		trimmed := strings.TrimSpace(line)
-		key, value, pair := strings.Cut(line, ":")
-		if pair && trimmed != "" && !strings.HasPrefix(trimmed, "-") {
-			rows = append(rows, "<dt>"+escape(strings.TrimSpace(key))+"</dt><dd>"+escape(strings.TrimSpace(value)))
-			continue
-		}
-		if trimmed == "" || len(rows) == 0 {
-			continue
-		}
-		last, separator := rows[len(rows)-1], " "
-		if strings.HasSuffix(last, "<dd>") {
-			separator = ""
-		} else if strings.HasPrefix(trimmed, "-") {
-			separator = ", "
-		}
-		rows[len(rows)-1] = last + separator + escape(strings.TrimPrefix(trimmed, "- "))
-	}
-	if len(rows) == 0 {
+	if strings.TrimSpace(block) == "" {
 		return ""
 	}
-	return `<dl class="frontmatter">` + strings.Join(rows, "</dd>") + "</dd></dl>"
+	return `<pre class="frontmatter">` + template.HTMLEscapeString(block) + "</pre>"
 }
 
 func scan(root string, depth int, skip []string) (dirs, files []string) {

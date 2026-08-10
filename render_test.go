@@ -65,14 +65,23 @@ func renderHTML(source string) string {
 }
 
 func TestRenderFrontmatter(t *testing.T) {
-	html := renderHTML("---\nname: mds\ndescription: renders md: nicely\ntools:\n  - Bash\n  - Sed\n---\n\n# Title\n")
+	html := renderHTML("---\nname: mds\ndescription: |\n  first line\n\n  after a blank line\ntools:\n  - Bash\n  - Sed\n---\n\n# Title\n")
 	for _, want := range []string{
-		`<dl class="frontmatter">`, "<dt>name</dt><dd>mds</dd>", "<dd>renders md: nicely</dd>",
-		"<dt>tools</dt><dd>Bash, Sed</dd>", `<h1 id="title">Title</h1>`,
+		`<pre class="frontmatter">`,
+		"name: mds\ndescription: |\n  first line\n\n  after a blank line\ntools:\n  - Bash\n  - Sed",
+		`<h1 id="title">Title</h1>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("render() missing %q in\n%s", want, html)
 		}
+	}
+	for _, glued := range []string{"first line after", "Bash, Sed", "| first"} {
+		if strings.Contains(html, glued) {
+			t.Errorf("frontmatter lost its line breaks, %q showed up in\n%s", glued, html)
+		}
+	}
+	if strings.Contains(html, "<dl") || strings.Contains(html, "<dt>") {
+		t.Errorf("frontmatter is served verbatim now, not parsed into a table:\n%s", html)
 	}
 	if strings.Contains(html, "<hr") || strings.Contains(html, "<h2") {
 		t.Errorf("frontmatter leaked into the body:\n%s", html)
