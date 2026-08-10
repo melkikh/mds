@@ -15,7 +15,7 @@ func (s *server) serveEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	stream := http.NewResponseController(w)
 	_ = stream.Flush()
-	updates := make(chan struct{}, 1)
+	updates := make(chan string, 1)
 	s.mu.Lock()
 	s.subs[updates] = struct{}{}
 	s.mu.Unlock()
@@ -24,22 +24,32 @@ func (s *server) serveEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-updates:
-			fmt.Fprint(w, "data: reload\n\n")
+		case message := <-updates:
+			fmt.Fprintf(w, "data: %s\n\n", message)
 			_ = stream.Flush()
 		}
 	}
 }
 
-func (s *server) broadcast() {
+func (s *server) broadcast(message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for updates := range s.subs {
 		select {
-		case updates <- struct{}{}:
+		case <-updates:
+		default:
+		}
+		select {
+		case updates <- message:
 		default:
 		}
 	}
+}
+
+func (s *server) tabs() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subs)
 }
 
 func (s *server) watch() {
@@ -55,7 +65,7 @@ func (s *server) watch() {
 		s.rootFiles(rt)
 	}
 	s.rootsMu.Unlock()
-	debounce := time.AfterFunc(time.Hour, s.broadcast)
+	debounce := time.AfterFunc(time.Hour, func() { s.broadcast("reload") })
 	debounce.Stop()
 	remount := time.NewTicker(30 * time.Second)
 	defer remount.Stop()
@@ -94,7 +104,7 @@ func (s *server) watchRoots(rewatch bool) {
 			s.addWatches(rt)
 		}
 		if returned {
-			s.broadcast()
+			s.broadcast("reload")
 		}
 	}
 }

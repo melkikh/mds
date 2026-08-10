@@ -641,7 +641,7 @@ func TestServeEvents(t *testing.T) {
 		done <- line
 	}()
 	for {
-		s.broadcast()
+		s.broadcast("reload")
 		select {
 		case line := <-done:
 			if strings.TrimSpace(line) != "data: reload" {
@@ -656,7 +656,7 @@ func TestServeEvents(t *testing.T) {
 func TestWatchReload(t *testing.T) {
 	root := fixture(t)
 	s := testServer(t, root, "")
-	updates := make(chan struct{}, 1)
+	updates := make(chan string, 1)
 	s.mu.Lock()
 	s.subs[updates] = struct{}{}
 	s.mu.Unlock()

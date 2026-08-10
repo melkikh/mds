@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -25,6 +26,8 @@ const (
 )
 
 const tokenHeader = "X-Mds-Token"
+
+const tabsHeader = "X-Mds-Tabs"
 
 const contentPolicy = "default-src 'none'; script-src 'nonce-%s'; style-src 'self' 'unsafe-inline'; " +
 	"img-src * data:; font-src 'self' data:; connect-src 'self'; form-action 'none'; " +
@@ -80,7 +83,7 @@ type server struct {
 	trees     map[string]*tree
 
 	mu   sync.Mutex
-	subs map[chan struct{}]struct{}
+	subs map[chan string]struct{}
 }
 
 func newServer(first *root, opts options) *server {
@@ -94,7 +97,7 @@ func newServer(first *root, opts options) *server {
 		tmpl:     template.Must(template.ParseFS(assetFS, "assets/page.html")),
 		cache:    map[string]cached{},
 		trees:    map[string]*tree{},
-		subs:     map[chan struct{}]struct{}{},
+		subs:     map[chan string]struct{}{},
 	}
 }
 
@@ -420,7 +423,8 @@ func (s *server) serveAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := s.addRoot(target, info.IsDir())
-	s.broadcast()
+	w.Header().Set(tabsHeader, strconv.Itoa(s.tabs()))
+	s.broadcast("go " + page)
 	fmt.Fprint(w, s.origin()+page)
 }
 
@@ -460,7 +464,7 @@ func (s *server) serveDrop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such root, or it is the last one", http.StatusBadRequest)
 		return
 	}
-	s.broadcast()
+	s.broadcast("reload")
 	w.WriteHeader(http.StatusNoContent)
 }
 

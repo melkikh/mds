@@ -5,7 +5,11 @@ const token = document.querySelector('meta[name=mds-token]').content
 const post = url => fetch(url, { method: 'POST', headers: { 'X-Mds-Token': token } })
 
 const events = new EventSource('/_events')
-events.onmessage = () => location.reload()
+events.onmessage = event => {
+  const [command, target] = event.data.split(' ')
+  if (command === 'go' && target !== location.pathname) location.href = target
+  else location.reload()
+}
 events.onerror = () => root.dataset.offline = ''
 events.onopen = () => offline() && location.reload()
 

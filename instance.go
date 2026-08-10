@@ -79,31 +79,32 @@ func call(running instance, path string) (*http.Response, error) {
 	return talk.Do(request)
 }
 
-func postAdd(running instance, target string) (page string, alive, added bool) {
+func postAdd(running instance, target string) (page string, tabs int, alive, added bool) {
 	response, err := call(running, "/_add?path="+url.QueryEscape(target))
 	if err != nil {
-		return "", !errors.Is(err, syscall.ECONNREFUSED), false
+		return "", 0, !errors.Is(err, syscall.ECONNREFUSED), false
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil || response.StatusCode != http.StatusOK {
-		return "", true, false
+		return "", 0, true, false
 	}
-	return string(body), true, true
+	open, _ := strconv.Atoi(response.Header.Get(tabsHeader))
+	return string(body), open, true, true
 }
 
-func addToRunning(target string) (string, bool) {
+func addToRunning(target string) (page string, tabs int, ok bool) {
 	for _, running := range readInstances() {
-		page, alive, added := postAdd(running, target)
+		page, tabs, alive, added := postAdd(running, target)
 		if !alive {
 			dropInstance(running.port)
 			continue
 		}
 		if added {
-			return page, true
+			return page, tabs, true
 		}
 	}
-	return "", false
+	return "", 0, false
 }
 
 func stopRunning() {

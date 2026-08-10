@@ -119,11 +119,11 @@ func TestCallSendsTheToken(t *testing.T) {
 func TestAddToRunning(t *testing.T) {
 	isolateCache(t)
 	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
-	if _, ok := addToRunning(plan); ok {
+	if _, _, ok := addToRunning(plan); ok {
 		t.Error("addToRunning succeeded with no state file")
 	}
 	addInstance("1", "dead-token")
-	if _, ok := addToRunning(plan); ok {
+	if _, _, ok := addToRunning(plan); ok {
 		t.Error("addToRunning succeeded against a dead server")
 	}
 	if len(readInstances()) != 0 {
@@ -135,11 +135,11 @@ func TestAddToRunning(t *testing.T) {
 	defer live.Close()
 	s.port = livePort(t, live)
 	addInstance(s.port, s.token)
-	page, ok := addToRunning(plan)
+	page, _, ok := addToRunning(plan)
 	if !ok || page != live.URL+"/_r1/plan.md" {
 		t.Fatalf("addToRunning() = %q %v, want the url of the added file", page, ok)
 	}
-	if _, ok := addToRunning(filepath.Join(t.TempDir(), "missing.md")); ok {
+	if _, _, ok := addToRunning(filepath.Join(t.TempDir(), "missing.md")); ok {
 		t.Error("addToRunning succeeded for a path the server rejected")
 	}
 	if len(readInstances()) != 1 {
@@ -160,7 +160,7 @@ func TestSlowServerIsNotDroppedAsDead(t *testing.T) {
 
 	port := livePort(t, slow)
 	addInstance(port, "token")
-	if _, ok := addToRunning(writeFile(t, t.TempDir(), "plan.md", "# Plan\n")); ok {
+	if _, _, ok := addToRunning(writeFile(t, t.TempDir(), "plan.md", "# Plan\n")); ok {
 		t.Error("addToRunning claimed a hung server took the path")
 	}
 	if len(readInstances()) != 1 {

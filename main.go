@@ -74,8 +74,8 @@ func main() {
 	}
 	agent := detectAgent()
 	if !opts.fresh {
-		if page, ok := addToRunning(abs); ok {
-			announce(page, agent)
+		if page, tabs, ok := addToRunning(abs); ok {
+			announce(page, agent, tabs, opts)
 			return
 		}
 	}
@@ -85,9 +85,9 @@ func main() {
 	}
 	listener, port, claimed := listen()
 	if !claimed && !opts.fresh {
-		if page, ok := joinHolder(abs); ok {
+		if page, tabs, ok := joinHolder(abs); ok {
 			_ = listener.Close()
-			announce(page, agent)
+			announce(page, agent, tabs, opts)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort, port)
@@ -107,23 +107,26 @@ func main() {
 	dropInstance(port)
 }
 
-func announce(page, agent string) {
+func announce(page, agent string, tabs int, opts options) {
 	fmt.Println(page)
+	if tabs == 0 && !opts.noOpen {
+		_ = openExternal(page)
+	}
 	if agent != "" {
 		fmt.Print(reuseHint)
 	}
 }
 
-func joinHolder(target string) (string, bool) {
+func joinHolder(target string) (string, int, bool) {
 	for attempt := range 5 {
 		if attempt > 0 {
 			time.Sleep(20 * time.Millisecond)
 		}
-		if page, ok := addToRunning(target); ok {
-			return page, true
+		if page, tabs, ok := addToRunning(target); ok {
+			return page, tabs, true
 		}
 	}
-	return "", false
+	return "", 0, false
 }
 
 func fatal(err error) {
