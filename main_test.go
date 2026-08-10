@@ -580,6 +580,36 @@ func TestServeAdd(t *testing.T) {
 	}
 }
 
+func TestAddSendsAnOpenTabToTheNewPage(t *testing.T) {
+	s := testServer(t, fixture(t), "")
+	s.port = "8080"
+	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
+
+	recorder := request(t, s, http.MethodPost, "/_add?path="+url.QueryEscape(plan))
+	if got := recorder.Header().Get(tabsHeader); got != "0" {
+		t.Errorf("%s = %q with nothing listening, want 0 so the cli opens a browser", tabsHeader, got)
+	}
+
+	updates := make(chan string, 1)
+	s.mu.Lock()
+	s.subs[updates] = struct{}{}
+	s.mu.Unlock()
+
+	next := writeFile(t, t.TempDir(), "next.md", "# Next\n")
+	recorder = request(t, s, http.MethodPost, "/_add?path="+url.QueryEscape(next))
+	if got := recorder.Header().Get(tabsHeader); got != "1" {
+		t.Errorf("%s = %q with a tab open, want 1 so the cli leaves the browser alone", tabsHeader, got)
+	}
+	select {
+	case message := <-updates:
+		if message != "go /_r2/next.md" {
+			t.Errorf("the open tab got %q, want it sent to the new page rather than a second tab opening", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the open tab was told nothing, so the new file would go unnoticed")
+	}
+}
+
 func TestServeStop(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
