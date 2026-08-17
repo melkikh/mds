@@ -136,8 +136,8 @@ func TestAddToRunning(t *testing.T) {
 	s.port = livePort(t, live)
 	addInstance(s.port, s.token)
 	page, _, ok := addToRunning(plan)
-	if !ok || page != live.URL+"/_r1/plan.md" {
-		t.Fatalf("addToRunning() = %q %v, want the url of the added file", page, ok)
+	if want := live.URL + s.roots[1].page("plan.md") + "#" + tokenParam + "=" + s.token; !ok || page != want {
+		t.Fatalf("addToRunning() = %q %v, want %q", page, ok, want)
 	}
 	if _, _, ok := addToRunning(filepath.Join(t.TempDir(), "missing.md")); ok {
 		t.Error("addToRunning succeeded for a path the server rejected")

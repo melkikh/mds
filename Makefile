@@ -1,8 +1,9 @@
+ARGS    ?= .
 MODULE  := $(shell go list -m)
 LATEST  := $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
 VERSION ?= $(shell echo $(LATEST) | awk -F. -v OFS=. '{$$NF++; print}')
 
-.PHONY: all build test check guard publish install clean
+.PHONY: all build run test check guard publish install clean
 .NOTPARALLEL:
 .DEFAULT_GOAL := build
 
@@ -10,6 +11,11 @@ all: build publish
 
 build:
 	go build -o mds .
+
+# make run ARGS="-f docs" to keep it in this terminal, or point it somewhere else
+run: build
+	@./mds --stop
+	./mds $(ARGS)
 
 test:
 	@test -z "$$(gofmt -l .)" || { echo "gofmt wants:"; gofmt -l .; exit 1; }

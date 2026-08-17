@@ -8,7 +8,8 @@ description: Show the user a markdown file rendered in their browser — a plan,
 `mds <file.md>` starts a local server, prints its URL and returns immediately. It does not
 block, so run it like any other command.
 
-- Give the user the URL from stdout. Do not also paste the file contents into the chat.
+- Give the user the URL from stdout whole, `#key=...` and all: it is what unlocks the page.
+  Do not also paste the file contents into the chat.
 - The page live-reloads on every save. After editing the file, do not restart mds.
 - `mds <dir>` serves every markdown file under a directory, with a file tree in the sidebar.
 - For another file, run mds again with its path: it joins the sidebar of the same page,

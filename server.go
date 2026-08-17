@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -29,9 +32,31 @@ const tokenHeader = "X-Mds-Token"
 
 const tabsHeader = "X-Mds-Tabs"
 
+const (
+	// sessionCookie holds the key once a page has traded the fragment for it, tokenParam
+	// names that fragment field, maxKey caps what /_auth will even look at.
+	sessionCookie = "mds_key"
+	tokenParam    = "key"
+	maxKey        = 256
+)
+
 const contentPolicy = "default-src 'none'; script-src 'nonce-%s'; style-src 'self' 'unsafe-inline'; " +
-	"img-src * data:; font-src 'self' data:; connect-src 'self'; form-action 'none'; " +
+	"img-src %s; font-src 'self' data:; connect-src 'self'; form-action 'none'; " +
 	"base-uri 'none'; frame-ancestors 'none'"
+
+const remoteEnv = "MDS_REMOTE_IMAGES"
+
+// imagePolicy decides whether a document may reach off this machine for pictures. It may
+// not by default: a remote <img> in a file someone else wrote is both a "he opened it"
+// beacon and, with inline css allowed, a way to spell out what is on the page one request
+// at a time. MDS_REMOTE_IMAGES=1 gets badges and other remote art back; anything ParseBool
+// reads as false, and anything it cannot read at all, leaves them blocked.
+func imagePolicy() string {
+	if remote, _ := strconv.ParseBool(os.Getenv(remoteEnv)); remote {
+		return "* data:"
+	}
+	return "'self' data:"
+}
 
 var assetExt = []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg", ".ico", ".bmp"}
 
@@ -65,11 +90,13 @@ type tree struct {
 
 type server struct {
 	roots    []*root
-	nextRoot int
+	assigned map[string]string
 	port     string
 	depth    int
 	skip     []string
 	token    string
+	session  string
+	action   string
 	launch   func(string) error
 	shutdown func()
 	tmpl     *template.Template
@@ -87,30 +114,79 @@ type server struct {
 }
 
 func newServer(first *root, opts options) *server {
-	return &server{
+	s := &server{
 		roots:    []*root{first},
-		nextRoot: 1,
+		assigned: map[string]string{},
 		depth:    opts.depth,
 		skip:     opts.skip,
 		token:    rand.Text(),
+		session:  rand.Text(),
+		action:   rand.Text(),
 		launch:   openInEditor,
-		tmpl:     template.Must(template.ParseFS(assetFS, "assets/page.html")),
+		tmpl:     template.Must(template.ParseFS(assetFS, "assets/page.html", "assets/gate.html")),
 		cache:    map[string]cached{},
 		trees:    map[string]*tree{},
 		subs:     map[chan string]struct{}{},
 	}
+	first.prefix = s.prefix(first.dir)
+	return s
+}
+
+// home is where a bare / lands: the first root's own page.
+func (s *server) home() string {
+	s.rootsMu.RLock()
+	defer s.rootsMu.RUnlock()
+	return s.roots[0].page(s.roots[0].entry)
+}
+
+// link is what mds prints and what the browser is sent to, key and all.
+func (s *server) link(page string) string {
+	return s.origin() + page + "#" + tokenParam + "=" + s.token
 }
 
 func (s *server) origin() string {
 	return "http://127.0.0.1:" + s.port
 }
 
-func newRoot(abs string, isDir bool, prefix string) *root {
-	rt := &root{dir: abs, prefix: prefix, mounted: true}
+func newRoot(abs string, isDir bool) *root {
+	rt := &root{dir: abs, mounted: true}
 	if !isDir {
 		rt.dir, rt.entry = filepath.Dir(abs), filepath.Base(abs)
 	}
 	return rt
+}
+
+// prefix names a root after its own directory, so a url reads /notes/todo.md rather than
+// /_r2/todo.md. Every root has one, including the first: one shape for every page.
+// A name a second directory would want is handed out once and kept, so a link never
+// quietly changes which root it points at.
+func (s *server) prefix(dir string) string {
+	name := prefixName(dir)
+	for suffix := 1; ; suffix++ {
+		taken := name
+		if suffix > 1 {
+			taken = fmt.Sprintf("%s-%d", name, suffix)
+		}
+		if owner, ok := s.assigned[taken]; !ok || owner == dir {
+			s.assigned[taken] = dir
+			return taken
+		}
+	}
+}
+
+func prefixName(dir string) string {
+	clean := strings.Map(func(r rune) rune {
+		if r == '.' || r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return unicode.ToLower(r)
+		}
+		return '-'
+	}, filepath.Base(dir))
+	// a leading _ is the shape of mds's own routes, a leading . or - reads like a flag
+	clean = strings.TrimLeft(clean, "_.-")
+	if clean == "" {
+		return "files"
+	}
+	return clean
 }
 
 func shortPath(dir string) string {
@@ -122,9 +198,6 @@ func shortPath(dir string) string {
 }
 
 func (rt *root) page(rel string) string {
-	if rt.prefix == "" {
-		return "/" + rel
-	}
 	return strings.TrimSuffix("/"+rt.prefix+"/"+rel, "/")
 }
 
@@ -141,12 +214,17 @@ func (s *server) routes() http.Handler {
 	mux.Handle("GET /_static/", http.StripPrefix("/_static/", http.FileServerFS(static)))
 	mux.HandleFunc("GET /_events", s.serveEvents)
 	mux.HandleFunc("GET /_tree", s.serveTree)
+	mux.HandleFunc("GET /_raw", s.serveRaw)
 	mux.HandleFunc("POST /_edit", s.guard(s.serveEdit))
-	mux.HandleFunc("POST /_add", s.guard(s.serveAdd))
+	mux.HandleFunc("POST /_add", s.mine(s.serveAdd))
 	mux.HandleFunc("POST /_drop", s.guard(s.serveDrop))
 	mux.HandleFunc("POST /_stop", s.guard(s.serveStop))
 	mux.HandleFunc("GET /", s.serveContent)
-	return s.local(mux)
+
+	front := http.NewServeMux()
+	front.HandleFunc("POST /_auth", s.serveAuth)
+	front.Handle("/", s.authenticate(mux))
+	return s.local(front)
 }
 
 func (s *server) local(next http.Handler) http.Handler {
@@ -157,15 +235,91 @@ func (s *server) local(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		next.ServeHTTP(w, r)
 	})
 }
 
+// authenticate keeps everything behind the key mds printed. The browser gets in by trading
+// the key in the url fragment for a cookie, so the key itself never travels to the server
+// in a url anything else could log or remember.
+func (s *server) authenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.authorized(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.serveGate(w)
+	})
+}
+
+// Three secrets, so that losing one is not losing everything. token is the master key: it
+// travels in the fragment and lives in the instances file, and only mds itself carries it.
+// session is what the cookie holds — cookies are not scoped by port, so anything else
+// listening on localhost may end up seeing it, and on its own it is read-only. action sits
+// in the page markup, where a stylesheet in a hostile document could in principle spell it
+// out; it does nothing without the cookie beside it.
+func (s *server) authorized(r *http.Request) bool {
+	return s.hasSession(r) || s.hasMaster(r)
+}
+
+func (s *server) hasSession(r *http.Request) bool {
+	cookie, err := r.Cookie(sessionCookie)
+	return err == nil && sameToken(cookie.Value, s.session)
+}
+
+func (s *server) hasMaster(r *http.Request) bool {
+	return sameToken(r.Header.Get(tokenHeader), s.token)
+}
+
+func sameToken(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func (s *server) serveAuth(w http.ResponseWriter, r *http.Request) {
+	key, err := io.ReadAll(io.LimitReader(r.Body, maxKey))
+	if err != nil || !sameToken(strings.TrimSpace(string(key)), s.token) {
+		http.Error(w, "that key is not this server's", http.StatusForbidden)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    s.session,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) serveGate(w http.ResponseWriter) {
+	nonce := rand.Text()
+	w.Header().Set("Content-Security-Policy", fmt.Sprintf(contentPolicy, nonce, imagePolicy()))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = s.tmpl.ExecuteTemplate(w, "gate.html", map[string]any{"Nonce": nonce, "Param": tokenParam})
+}
+
+// guard lets the open page act — with its cookie and the value its own markup carries,
+// both — and lets mds itself act with the master key.
 func (s *server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(tokenHeader) != s.token {
+		acting := s.hasSession(r) && sameToken(r.Header.Get(tokenHeader), s.action)
+		if !acting && !s.hasMaster(r) {
 			http.Error(w, "bad or missing "+tokenHeader, http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// mounting a new root reaches anywhere on the disk, so only mds itself may ask for it.
+func (s *server) mine(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.hasMaster(r) {
+			http.Error(w, "only mds itself can mount a path", http.StatusForbidden)
 			return
 		}
 		next(w, r)
@@ -207,21 +361,30 @@ func statInside(dir, rel string) error {
 	return err
 }
 
+// resolve splits /prefix/rel into the root that owns it and the path inside that root.
+// Nothing lives outside a root, so an unknown prefix resolves to nothing at all.
 func (s *server) resolve(target string) (*root, string) {
 	s.rootsMu.RLock()
 	defer s.rootsMu.RUnlock()
-	rel := strings.TrimPrefix(path.Clean(target), "/")
-	head, rest, _ := strings.Cut(rel, "/")
+	head, rest, _ := strings.Cut(strings.TrimPrefix(path.Clean(target), "/"), "/")
 	for _, rt := range s.roots {
-		if rt.prefix != "" && head == rt.prefix {
+		if head == rt.prefix {
 			return rt, rest
 		}
 	}
-	return s.roots[0], rel
+	return nil, ""
 }
 
 func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		http.Redirect(w, r, s.home(), http.StatusFound)
+		return
+	}
 	rt, rel := s.resolve(r.URL.Path)
+	if rt == nil {
+		s.notFound(w, r.URL.Path)
+		return
+	}
 	if rel == "." || rel == "" {
 		if rel = rt.entry; rel == "" {
 			rel = indexFile(rt.dir)
@@ -250,6 +413,26 @@ func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notFound(w, rel)
+}
+
+func (s *server) serveRaw(w http.ResponseWriter, r *http.Request) {
+	rt, rel := s.resolve(r.URL.Query().Get("path"))
+	if rt == nil || !isMarkdown(rel) || strings.HasPrefix(rel, "..") {
+		http.Error(w, "not a markdown file", http.StatusBadRequest)
+		return
+	}
+	source, err := readInside(rt.dir, rel)
+	if err != nil {
+		entry, ok := s.recall(filepath.Join(rt.dir, filepath.FromSlash(rel)))
+		if !ok {
+			http.Error(w, "no such file", http.StatusNotFound)
+			return
+		}
+		source = entry.source
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(source)
 }
 
 func (s *server) serveAsset(w http.ResponseWriter, r *http.Request, dir, rel string) {
@@ -285,14 +468,14 @@ func (s *server) renderPage(w http.ResponseWriter, v view) {
 	tree := len(s.roots) > 1 || s.roots[0].entry == ""
 	s.rootsMu.RUnlock()
 	nonce := rand.Text()
-	w.Header().Set("Content-Security-Policy", fmt.Sprintf(contentPolicy, nonce))
+	w.Header().Set("Content-Security-Policy", fmt.Sprintf(contentPolicy, nonce, imagePolicy()))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(v.status)
-	_ = s.tmpl.Execute(w, map[string]any{
+	_ = s.tmpl.ExecuteTemplate(w, "page.html", map[string]any{
 		"Title": v.title, "Path": v.path, "Tree": tree,
 		"Stale": v.stale, "Content": v.content, "Mermaid": v.mermaid,
-		"Nonce": nonce, "Token": s.token,
+		"Nonce": nonce, "Token": s.action,
 	})
 }
 
@@ -356,10 +539,7 @@ func (s *server) serveTree(w http.ResponseWriter, r *http.Request) {
 	for _, rt := range roots {
 		branch := buildTree(s.rootFiles(rt))
 		prefixPaths(branch, rt.prefix)
-		if len(roots) > 1 {
-			branch = []*node{{Type: "root", Name: shortPath(rt.dir), Path: rt.prefix, Children: branch}}
-		}
-		nodes = append(nodes, branch...)
+		nodes = append(nodes, &node{Type: "root", Name: shortPath(rt.dir), Path: rt.prefix, Children: branch})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"root": filepath.Base(roots[0].dir), "nodes": nodes})
@@ -400,7 +580,7 @@ func (s *server) rescan() {
 
 func (s *server) serveEdit(w http.ResponseWriter, r *http.Request) {
 	rt, rel := s.resolve(r.URL.Query().Get("path"))
-	if !isMarkdown(rel) || strings.HasPrefix(rel, "..") {
+	if rt == nil || !isMarkdown(rel) || strings.HasPrefix(rel, "..") {
 		http.Error(w, "not a markdown file", http.StatusBadRequest)
 		return
 	}
@@ -425,7 +605,7 @@ func (s *server) serveAdd(w http.ResponseWriter, r *http.Request) {
 	page := s.addRoot(target, info.IsDir())
 	w.Header().Set(tabsHeader, strconv.Itoa(s.tabs()))
 	s.broadcast("go " + page)
-	fmt.Fprint(w, s.origin()+page)
+	fmt.Fprint(w, s.link(page))
 }
 
 func (s *server) addRoot(abs string, isDir bool) string {
@@ -436,8 +616,8 @@ func (s *server) addRoot(abs string, isDir bool) string {
 			return rt.page(rel)
 		}
 	}
-	rt := newRoot(abs, isDir, fmt.Sprintf("_r%d", s.nextRoot))
-	s.nextRoot++
+	rt := newRoot(abs, isDir)
+	rt.prefix = s.prefix(rt.dir)
 	s.roots = append(s.roots, rt)
 	s.addWatches(rt)
 	return rt.page(rt.entry)

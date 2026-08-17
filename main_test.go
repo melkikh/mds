@@ -48,9 +48,14 @@ func testServer(t *testing.T, dir, entry string) *server {
 	if entry != "" {
 		target = filepath.Join(dir, entry)
 	}
-	s := newServer(newRoot(target, entry == "", ""), options{depth: 5, skip: defaultSkip})
+	s := newServer(newRoot(target, entry == ""), options{depth: 5, skip: defaultSkip})
 	s.launch = func(string) error { return nil }
 	return s
+}
+
+// at is the url of something inside the first root: every page hangs off that root's prefix.
+func at(s *server, rel string) string {
+	return s.roots[0].page(rel)
 }
 
 func writeFile(t *testing.T, dir, name, body string) string {
@@ -66,6 +71,7 @@ func request(t *testing.T, s *server, method, url string) *httptest.ResponseReco
 	t.Helper()
 	req := httptest.NewRequest(method, url, nil)
 	req.Host = "127.0.0.1:8080"
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.session})
 	if method == http.MethodPost {
 		req.Header.Set(tokenHeader, s.token)
 	}
@@ -104,10 +110,11 @@ func TestParseArgs(t *testing.T) {
 			o.target, o.depth = "docs", -1
 		})},
 		{[]string{"-s", "target,out"}, with(func(o *options) { o.skip = []string{"target", "out"} })},
-		{[]string{"-b", "plan.md"}, with(func(o *options) { o.target, o.background = "plan.md", true })},
-		{[]string{"--background", "--new", "--no-open"}, with(func(o *options) {
-			o.background, o.fresh, o.noOpen = true, true, true
+		{[]string{"-f", "plan.md"}, with(func(o *options) { o.target, o.foreground = "plan.md", true })},
+		{[]string{"--foreground", "--new", "--no-open"}, with(func(o *options) {
+			o.foreground, o.fresh, o.noOpen = true, true, true
 		})},
+		{[]string{"-b", "plan.md"}, with(func(o *options) { o.target = "plan.md" })},
 		{[]string{"-d"}, defaults},
 		{[]string{"-d", "oops"}, defaults},
 	}
@@ -120,6 +127,17 @@ func TestParseArgs(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("parseArgs(%q) = %+v, want %+v", c.args, got, c.want)
 		}
+	}
+}
+
+func TestSharedPort(t *testing.T) {
+	t.Setenv(portEnv, "")
+	if got := sharedPort(); got != defaultPort {
+		t.Errorf("sharedPort() = %q, want the default %q", got, defaultPort)
+	}
+	t.Setenv(portEnv, "9001")
+	if got := sharedPort(); got != "9001" {
+		t.Errorf("sharedPort() = %q, want the %s override", got, portEnv)
 	}
 }
 
@@ -207,7 +225,7 @@ func TestOpenInEditorKeepsQuotedPathWhole(t *testing.T) {
 
 func TestFavicon(t *testing.T) {
 	s := testServer(t, fixture(t), "")
-	if _, body := get(t, s, "/"); !strings.Contains(body, `rel="icon" href="/_static/favicon.svg"`) {
+	if _, body := get(t, s, at(s, "")); !strings.Contains(body, `rel="icon" href="/_static/favicon.svg"`) {
 		t.Error("the page does not point at the favicon, so browsers will probe /favicon.ico instead")
 	}
 	status, icon := get(t, s, "/_static/favicon.svg")
@@ -227,10 +245,10 @@ func TestMermaidLoadsOnlyWhereItIsUsed(t *testing.T) {
 	writeFile(t, dir, "chart.md", "# Chart\n\n```mermaid\ngraph TD\n  A --> B\n```\n")
 	s := testServer(t, dir, "")
 
-	if _, body := get(t, s, "/plain.md"); strings.Contains(body, "mermaid.min.js") {
+	if _, body := get(t, s, at(s, "plain.md")); strings.Contains(body, "mermaid.min.js") {
 		t.Error("a page with no diagram should not pull in 3.5 MB of mermaid")
 	}
-	_, body := get(t, s, "/chart.md")
+	_, body := get(t, s, at(s, "chart.md"))
 	if !strings.Contains(body, "mermaid.min.js") {
 		t.Fatal("a page with a diagram must load mermaid")
 	}
@@ -249,16 +267,18 @@ func TestServeContentDirMode(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"/", http.StatusOK, "Root"},
-		{"/", http.StatusOK, `id="burger"`},
-		{"/docs/intro.md", http.StatusOK, "Intro"},
-		{"/docs/intro.md", http.StatusOK, `id="edit" title="Open in editor" data-path="/docs/intro.md"`},
-		{"/docs/api/spec.markdown", http.StatusOK, "Spec"},
-		{"/notes.txt", http.StatusNotFound, "no such file"},
+		{"/", http.StatusFound, at(s, "")},
+		{at(s, ""), http.StatusOK, "Root"},
+		{at(s, ""), http.StatusOK, `id="burger"`},
+		{at(s, "docs/intro.md"), http.StatusOK, "Intro"},
+		{at(s, "docs/intro.md"), http.StatusOK, `id="edit" title="Open in editor" data-path="` + at(s, "docs/intro.md") + `"`},
+		{at(s, "docs/api/spec.markdown"), http.StatusOK, "Spec"},
+		{at(s, "notes.txt"), http.StatusNotFound, "no such file"},
 		{"/_static/app.css", http.StatusOK, "--code-bg"},
-		{"/missing.md", http.StatusNotFound, "no such file"},
+		{at(s, "missing.md"), http.StatusNotFound, "no such file"},
 		{"/../../../../etc/passwd", http.StatusMovedPermanently, "/etc/passwd"},
 		{"/etc/passwd", http.StatusNotFound, ""},
+		{"/nosuchroot/README.md", http.StatusNotFound, "no such file"},
 	}
 	for _, c := range cases {
 		status, body := get(t, s, c.url)
@@ -269,19 +289,19 @@ func TestServeContentDirMode(t *testing.T) {
 			t.Errorf("GET %s escaped the root directory", c.url)
 		}
 	}
-	if status, _ := get(t, s, "/%2e%2e/%2e%2e/etc/hosts"); status == http.StatusOK {
+	if status, _ := get(t, s, at(s, "%2e%2e/%2e%2e/etc/hosts")); status == http.StatusOK {
 		t.Error("encoded traversal must not be served")
 	}
-	if _, body := get(t, s, "/missing.md"); strings.Contains(body, `id="edit"`) {
+	if _, body := get(t, s, at(s, "missing.md")); strings.Contains(body, `id="edit"`) {
 		t.Error("404 page should not offer the edit button")
 	}
 }
 
 func TestServeContentFileMode(t *testing.T) {
 	s := testServer(t, fixture(t), "docs/intro.md")
-	status, body := get(t, s, "/")
+	status, body := get(t, s, at(s, ""))
 	if status != http.StatusOK || !strings.Contains(body, "Intro") {
-		t.Errorf("GET / = %d, want 200 with the entry file", status)
+		t.Errorf("GET %s = %d, want 200 with the entry file", at(s, ""), status)
 	}
 	if strings.Contains(body, `id="burger"`) {
 		t.Error("file mode should not render the burger")
@@ -300,12 +320,13 @@ func TestServeEdit(t *testing.T) {
 		query  string
 		status int
 	}{
-		{"docs/intro.md", http.StatusNoContent},
-		{"/docs/intro.md", http.StatusNoContent},
+		{at(s, "docs/intro.md"), http.StatusNoContent},
+		{strings.TrimPrefix(at(s, "docs/intro.md"), "/"), http.StatusNoContent},
 		{"../../../etc/passwd.md", http.StatusBadRequest},
-		{"notes.txt", http.StatusBadRequest},
+		{"docs/intro.md", http.StatusBadRequest},
+		{at(s, "notes.txt"), http.StatusBadRequest},
 		{"", http.StatusBadRequest},
-		{"missing.md", http.StatusNotFound},
+		{at(s, "missing.md"), http.StatusNotFound},
 	} {
 		if status, _ := post(t, s, "/_edit?path="+c.query); status != c.status {
 			t.Errorf("POST /_edit?path=%s = %d, want %d", c.query, status, c.status)
@@ -316,10 +337,10 @@ func TestServeEdit(t *testing.T) {
 		t.Errorf("launched %q, want the entry file twice", opened)
 	}
 	s.launch = func(string) error { return errors.New("no editor") }
-	if status, _ := post(t, s, "/_edit?path=README.md"); status != http.StatusInternalServerError {
+	if status, _ := post(t, s, "/_edit?path="+at(s, "README.md")); status != http.StatusInternalServerError {
 		t.Errorf("failing editor = %d, want 500", status)
 	}
-	if status, _ := get(t, s, "/_edit?path=README.md"); status != http.StatusNotFound {
+	if status, _ := get(t, s, "/_edit?path="+at(s, "README.md")); status != http.StatusNotFound {
 		t.Errorf("GET /_edit = %d, want 404", status)
 	}
 	if len(opened) != 2 {
@@ -327,38 +348,121 @@ func TestServeEdit(t *testing.T) {
 	}
 }
 
+func TestServeRaw(t *testing.T) {
+	dir := t.TempDir()
+	source := "---\nname: skill\n---\n\n# Title\n\n```go\nfunc main() {}\n```\n"
+	writeFile(t, dir, "skill.md", source)
+	writeFile(t, dir, "notes.txt", "plain\n")
+	s := testServer(t, dir, "")
+
+	recorder := request(t, s, http.MethodGet, "/_raw?path="+at(s, "skill.md"))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != source {
+		t.Errorf("GET /_raw = %d %q, want the file verbatim", recorder.Code, recorder.Body)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Errorf("/_raw Content-Type = %q, want plain text", got)
+	}
+	for _, c := range []struct {
+		query  string
+		status int
+	}{
+		{at(s, "notes.txt"), http.StatusBadRequest},
+		{"", http.StatusBadRequest},
+		{"skill.md", http.StatusBadRequest},
+		{"../../../etc/passwd.md", http.StatusBadRequest},
+		{at(s, "missing.md"), http.StatusNotFound},
+	} {
+		if status, body := get(t, s, "/_raw?path="+c.query); status != c.status {
+			t.Errorf("GET /_raw?path=%s = %d %q, want %d", c.query, status, body, c.status)
+		}
+	}
+
+	if status, _ := get(t, s, at(s, "skill.md")); status != http.StatusOK {
+		t.Fatal("the page has to render before the source can be cached")
+	}
+	if err := os.Remove(filepath.Join(dir, "skill.md")); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := get(t, s, "/_raw?path="+at(s, "skill.md")); status != http.StatusOK || body != source {
+		t.Errorf("GET /_raw for a deleted file = %d %q, want the cached copy the page still shows", status, body)
+	}
+}
+
 func TestAddRoot(t *testing.T) {
 	dir := fixture(t)
-	outside := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "plans")
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	plan := writeFile(t, outside, "plan.md", "# Plan\n")
 	s := testServer(t, dir, "")
 
-	if page := s.addRoot(filepath.Join(dir, "docs", "intro.md"), false); page != "/docs/intro.md" {
-		t.Errorf("adding a file already in the tree = %q, want /docs/intro.md", page)
+	if page := s.addRoot(filepath.Join(dir, "docs", "intro.md"), false); page != at(s, "docs/intro.md") {
+		t.Errorf("adding a file already in the tree = %q, want %q", page, at(s, "docs/intro.md"))
 	}
-	if page := s.addRoot(dir, true); page != "/" {
-		t.Errorf("adding the served root = %q, want /", page)
+	if page := s.addRoot(dir, true); page != at(s, "") {
+		t.Errorf("adding the served root = %q, want %q", page, at(s, ""))
 	}
 	if len(s.roots) != 1 {
 		t.Fatalf("roots = %d, want the served paths to be reused", len(s.roots))
 	}
-	if page := s.addRoot(plan, false); page != "/_r1/plan.md" {
-		t.Fatalf("adding an outside file = %q, want /_r1/plan.md", page)
+	if page := s.addRoot(plan, false); page != "/plans/plan.md" {
+		t.Fatalf("adding an outside file = %q, want /plans/plan.md: a root is named after its directory", page)
 	}
-	if page := s.addRoot(plan, false); page != "/_r1/plan.md" || len(s.roots) != 2 {
+	if page := s.addRoot(plan, false); page != "/plans/plan.md" || len(s.roots) != 2 {
 		t.Errorf("adding it twice = %q with %d roots, want the same page and 2 roots", page, len(s.roots))
 	}
-	if status, body := get(t, s, "/_r1/plan.md"); status != http.StatusOK || !strings.Contains(body, "Plan") {
-		t.Errorf("GET /_r1/plan.md = %d, want the added file", status)
+	if status, body := get(t, s, "/plans/plan.md"); status != http.StatusOK || !strings.Contains(body, "Plan") {
+		t.Errorf("GET /plans/plan.md = %d, want the added file", status)
 	}
-	if status, body := get(t, s, "/_r1"); status != http.StatusOK || !strings.Contains(body, "Plan") {
-		t.Errorf("GET /_r1 = %d, want the entry of that root", status)
+	if status, body := get(t, s, "/plans"); status != http.StatusOK || !strings.Contains(body, "Plan") {
+		t.Errorf("GET /plans = %d, want the entry of that root", status)
 	}
-	if _, body := get(t, s, "/_r1/plan.md"); !strings.Contains(body, `id="burger"`) {
+	if _, body := get(t, s, "/plans/plan.md"); !strings.Contains(body, `id="burger"`) {
 		t.Error("a second root should bring the sidebar up")
 	}
-	if status, _ := get(t, s, "/_r9/plan.md"); status != http.StatusNotFound {
+	if status, _ := get(t, s, "/nosuchroot/plan.md"); status != http.StatusNotFound {
 		t.Errorf("unknown root prefix = %d, want 404", status)
+	}
+}
+
+func TestPrefixName(t *testing.T) {
+	for dir, want := range map[string]string{
+		"/home/me/notes":         "notes",
+		"/home/me/My Notes":      "my-notes",
+		"/home/me/_private":      "private",
+		"/home/me/.config":       "config",
+		"/home/me/Docs.v2":       "docs.v2",
+		"/home/me/добро":         "добро",
+		"/home/me/_":             "files",
+		string(os.PathSeparator): "files",
+	} {
+		if got := prefixName(dir); got != want {
+			t.Errorf("prefixName(%q) = %q, want %q", dir, got, want)
+		}
+	}
+}
+
+func TestPrefixKeepsNamesToThemselves(t *testing.T) {
+	s := testServer(t, t.TempDir(), "")
+	first, second := filepath.Join(t.TempDir(), "notes"), filepath.Join(t.TempDir(), "notes")
+	for _, dir := range []string{first, second} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.prefix(first); got != "notes" {
+		t.Fatalf("first notes dir = %q, want notes", got)
+	}
+	if got := s.prefix(second); got != "notes-2" {
+		t.Errorf("a second notes dir = %q, want notes-2", got)
+	}
+	if got := s.prefix(first); got != "notes" {
+		t.Errorf("the first one again = %q, want its own name back", got)
+	}
+	s.dropRoot("notes")
+	if got := s.prefix(filepath.Join(t.TempDir(), "notes")); got == "notes" {
+		t.Error("a dropped name went to a different directory, so an old tab would show the wrong root")
 	}
 }
 
@@ -368,21 +472,21 @@ func TestServeContentFromCache(t *testing.T) {
 	writeFile(t, dir, "cold.md", "# Cold\n")
 	s := testServer(t, dir, "")
 
-	if status, body := get(t, s, "/plan.md"); status != http.StatusOK || strings.Contains(body, "data-stale") {
+	if status, body := get(t, s, at(s, "plan.md")); status != http.StatusOK || strings.Contains(body, "data-stale") {
 		t.Fatalf("GET /plan.md = %d, want a fresh 200", status)
 	}
 	s.rootFiles(s.roots[0])
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
-	status, body := get(t, s, "/plan.md")
+	status, body := get(t, s, at(s, "plan.md"))
 	if status != http.StatusOK || !strings.Contains(body, "Plan") {
 		t.Errorf("GET /plan.md after the directory vanished = %d, want the cached copy", status)
 	}
 	if !strings.Contains(body, "data-stale") {
 		t.Error("a cached page must be marked stale")
 	}
-	if status, _ := get(t, s, "/cold.md"); status != http.StatusNotFound {
+	if status, _ := get(t, s, at(s, "cold.md")); status != http.StatusNotFound {
 		t.Errorf("GET /cold.md = %d, want 404: it was never read, so nothing is cached", status)
 	}
 	if _, body := get(t, s, "/_tree"); !strings.Contains(body, "plan.md") {
@@ -416,12 +520,12 @@ func TestRepeatedRequestsReuseTheCache(t *testing.T) {
 	file := writeFile(t, dir, "plan.md", "# Plan\n\n```go\nfunc main() {}\n```\n")
 	s := testServer(t, dir, "")
 
-	get(t, s, "/plan.md")
+	get(t, s, at(s, "plan.md"))
 	first, ok := s.recall(file)
 	if !ok {
 		t.Fatal("reading a file should cache it")
 	}
-	get(t, s, "/plan.md")
+	get(t, s, at(s, "plan.md"))
 	again, _ := s.recall(file)
 	if &first.source[0] != &again.source[0] {
 		t.Error("an unchanged file was re-read into a new buffer")
@@ -433,17 +537,17 @@ func TestRepeatedRequestsReuseTheCache(t *testing.T) {
 	if err := os.WriteFile(file, []byte("# Edited\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, body := get(t, s, "/plan.md"); !strings.Contains(body, "Edited") {
+	if _, body := get(t, s, at(s, "plan.md")); !strings.Contains(body, "Edited") {
 		t.Error("the cache served a stale render after the file changed")
 	}
 
 	s.cacheMu.Lock()
-	cachedTree := s.trees[""]
+	cachedTree := s.trees[s.roots[0].prefix]
 	s.cacheMu.Unlock()
 	get(t, s, "/_tree")
 	get(t, s, "/_tree")
 	s.cacheMu.Lock()
-	sameTree := s.trees[""] == cachedTree
+	sameTree := s.trees[s.roots[0].prefix] == cachedTree
 	s.cacheMu.Unlock()
 	if cachedTree != nil && !sameTree {
 		t.Error("/_tree walked the filesystem again without anything changing")
@@ -451,7 +555,7 @@ func TestRepeatedRequestsReuseTheCache(t *testing.T) {
 	s.rescan()
 	get(t, s, "/_tree")
 	s.cacheMu.Lock()
-	rescanned := s.trees[""] != cachedTree
+	rescanned := s.trees[s.roots[0].prefix] != cachedTree
 	s.cacheMu.Unlock()
 	if !rescanned {
 		t.Error("/_tree kept the old tree after the watcher reported a change")
@@ -462,8 +566,9 @@ func TestDropRoot(t *testing.T) {
 	dir := fixture(t)
 	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
 	s := testServer(t, dir, "")
-	s.addRoot(plan, false)
-	get(t, s, "/_r1/plan.md")
+	added := s.addRoot(plan, false)
+	prefix := s.roots[1].prefix
+	get(t, s, added)
 	if _, ok := s.recall(plan); !ok {
 		t.Fatal("reading a file should cache it")
 	}
@@ -472,11 +577,11 @@ func TestDropRoot(t *testing.T) {
 		status, _ := post(t, s, "/_drop"+query)
 		return status
 	}
-	if code := drop("?root=_r9"); code != http.StatusBadRequest {
+	if code := drop("?root=nosuchroot"); code != http.StatusBadRequest {
 		t.Errorf("dropping an unknown root = %d, want 400", code)
 	}
-	if code := drop("?root=_r1"); code != http.StatusNoContent {
-		t.Fatalf("POST /_drop?root=_r1 = %d, want 204", code)
+	if code := drop("?root=" + prefix); code != http.StatusNoContent {
+		t.Fatalf("POST /_drop?root=%s = %d, want 204", prefix, code)
 	}
 	if len(s.roots) != 1 {
 		t.Errorf("roots = %d, want the dropped one gone", len(s.roots))
@@ -484,8 +589,8 @@ func TestDropRoot(t *testing.T) {
 	if _, ok := s.recall(plan); ok {
 		t.Error("dropping a root must clear its cached files")
 	}
-	if status, _ := get(t, s, "/_r1/plan.md"); status != http.StatusNotFound {
-		t.Errorf("GET /_r1/plan.md after the drop = %d, want 404", status)
+	if status, _ := get(t, s, added); status != http.StatusNotFound {
+		t.Errorf("GET %s after the drop = %d, want 404", added, status)
 	}
 	if code := drop("?root="); code != http.StatusBadRequest {
 		t.Errorf("dropping the last root = %d, want 400", code)
@@ -500,12 +605,11 @@ func TestDroppedPrefixIsNotReused(t *testing.T) {
 	first := writeFile(t, t.TempDir(), "first.md", "# First\n")
 	second := writeFile(t, t.TempDir(), "second.md", "# Second\n")
 	s := testServer(t, dir, "")
-	if page := s.addRoot(first, false); page != "/_r1/first.md" {
-		t.Fatalf("first added root = %q", page)
-	}
-	s.dropRoot("_r1")
-	if page := s.addRoot(second, false); page != "/_r2/second.md" {
-		t.Errorf("root added after a drop = %q, want /_r2/second.md so old tabs keep their urls", page)
+	page := s.addRoot(first, false)
+	prefix := s.roots[1].prefix
+	s.dropRoot(prefix)
+	if next := s.addRoot(second, false); strings.HasPrefix(next, "/"+prefix+"/") {
+		t.Errorf("root added after dropping %q = %q, want a fresh prefix so old tabs keep their urls", page, next)
 	}
 }
 
@@ -535,26 +639,32 @@ func TestTreeRoots(t *testing.T) {
 	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
 	s := testServer(t, dir, "")
 
-	if _, body := get(t, s, "/_tree"); strings.Contains(body, `"type":"root"`) {
-		t.Error("a single root should not be wrapped in a labelled group")
+	read := func() []*node {
+		t.Helper()
+		_, body := get(t, s, "/_tree")
+		var tree struct{ Nodes []*node }
+		if err := json.Unmarshal([]byte(body), &tree); err != nil {
+			t.Fatal(err)
+		}
+		return tree.Nodes
+	}
+	nodes := read()
+	if len(nodes) != 1 || nodes[0].Type != "root" || nodes[0].Name != "~/project" {
+		t.Fatalf("nodes = %+v, want the single root in a group of its own", nodes)
+	}
+	if nodes[0].Path != "project" || nodes[0].Children[0].Path != "project/README.md" {
+		t.Errorf("root group = %+v, want it named after the directory", nodes[0])
 	}
 	s.addRoot(plan, false)
-	_, body := get(t, s, "/_tree")
-	var tree struct{ Nodes []*node }
-	if err := json.Unmarshal([]byte(body), &tree); err != nil {
-		t.Fatal(err)
+	nodes = read()
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %+v, want one group per root", nodes)
 	}
-	if len(tree.Nodes) != 2 {
-		t.Fatalf("nodes = %+v, want one group per root", tree.Nodes)
+	if nodes[1].Name != shortPath(filepath.Dir(plan)) || len(nodes[1].Children) != 1 {
+		t.Errorf("second group = %+v, want the directory the file came from", nodes[1])
 	}
-	if tree.Nodes[0].Type != "root" || tree.Nodes[0].Name != "~/project" {
-		t.Errorf("first group = %+v, want a root named ~/project", tree.Nodes[0])
-	}
-	if tree.Nodes[1].Name != shortPath(filepath.Dir(plan)) || len(tree.Nodes[1].Children) != 1 {
-		t.Errorf("second group = %+v, want the directory the file came from", tree.Nodes[1])
-	}
-	if tree.Nodes[1].Children[0].Path != "_r1/plan.md" {
-		t.Errorf("child path = %q, want the prefixed path", tree.Nodes[1].Children[0].Path)
+	if want := s.roots[1].prefix + "/plan.md"; nodes[1].Children[0].Path != want {
+		t.Errorf("child path = %q, want %q", nodes[1].Children[0].Path, want)
 	}
 }
 
@@ -566,8 +676,13 @@ func TestServeAdd(t *testing.T) {
 	add := func(target string) (int, string) {
 		return post(t, s, "/_add?path="+url.QueryEscape(target))
 	}
-	if status, body := add(plan); status != http.StatusOK || body != s.origin()+"/_r1/plan.md" {
-		t.Errorf("POST /_add = %d %q, want the full URL of the added file", status, body)
+	status, body := add(plan)
+	want := s.link(s.roots[1].page("plan.md"))
+	if status != http.StatusOK || body != want {
+		t.Errorf("POST /_add = %d %q, want %q: the url of the added file, key and all", status, body, want)
+	}
+	if !strings.Contains(body, "#"+tokenParam+"=") {
+		t.Error("the printed url must carry the key or the browser lands on the gate")
 	}
 	if status, _ := add("relative.md"); status != http.StatusBadRequest {
 		t.Errorf("relative path = %d, want 400", status)
@@ -602,8 +717,8 @@ func TestAddSendsAnOpenTabToTheNewPage(t *testing.T) {
 	}
 	select {
 	case message := <-updates:
-		if message != "go /_r2/next.md" {
-			t.Errorf("the open tab got %q, want it sent to the new page rather than a second tab opening", message)
+		if want := "go " + s.roots[2].page("next.md"); message != want {
+			t.Errorf("the open tab got %q, want %q: sent to the new page rather than a second tab opening", message, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the open tab was told nothing, so the new file would go unnoticed")
@@ -648,8 +763,12 @@ func TestServeTree(t *testing.T) {
 	if tree.Root != filepath.Base(root) {
 		t.Errorf("root = %q, want %q", tree.Root, filepath.Base(root))
 	}
-	if len(tree.Nodes) != 2 || tree.Nodes[0].Name != "docs" || tree.Nodes[1].Name != "README.md" {
-		t.Errorf("nodes = %+v, want docs then README.md", tree.Nodes)
+	if len(tree.Nodes) != 1 || tree.Nodes[0].Type != "root" {
+		t.Fatalf("nodes = %+v, want every root in a group of its own", tree.Nodes)
+	}
+	inside := tree.Nodes[0].Children
+	if len(inside) != 2 || inside[0].Name != "docs" || inside[1].Name != "README.md" {
+		t.Errorf("nodes = %+v, want docs then README.md", inside)
 	}
 }
 
@@ -657,7 +776,12 @@ func TestServeEvents(t *testing.T) {
 	s := testServer(t, t.TempDir(), "")
 	httpServer := httptest.NewServer(s.routes())
 	defer httpServer.Close()
-	response, err := http.Get(httpServer.URL + "/_events")
+	request, err := http.NewRequest(http.MethodGet, httpServer.URL+"/_events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.session})
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -693,7 +817,7 @@ func TestWatchReload(t *testing.T) {
 	go s.watch()
 	time.Sleep(200 * time.Millisecond)
 	s.cacheMu.Lock()
-	files := slices.Clone(s.trees[""].files)
+	files := slices.Clone(s.trees[s.roots[0].prefix].files)
 	s.cacheMu.Unlock()
 	if !slices.Contains(files, "README.md") {
 		t.Errorf("the watcher should warm the tree fallback, got %q", files)

@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mds</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { width: 320px; text-align: center; }
+  p { color: GrayText; }
+  form { display: flex; gap: 6px; }
+  input, button {
+    font: inherit;
+    padding: 5px 9px;
+    color: inherit;
+    background: transparent;
+    border: 1px solid GrayText;
+    border-radius: 6px;
+  }
+  input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  button { cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+<p id="note">Open the link mds printed — it carries the key.</p>
+<form id="unlock">
+<input id="key" placeholder="or paste the key" autocomplete="off" spellcheck="false" autocapitalize="off">
+<button>unlock</button>
+</form>
+</main>
+<script nonce="{{.Nonce}}">
+const note = document.getElementById("note")
+const offer = async key => {
+  if (!key) return false
+  const answer = await fetch("/_auth", { method: "POST", body: key })
+  if (!answer.ok) return false
+  // the cookie is the key now: drop it from the address bar, history and session restore
+  history.replaceState(null, "", location.pathname + location.search)
+  location.reload()
+  return true
+}
+const refuse = ok => ok || (note.textContent = "that key is not this server's")
+document.getElementById("unlock").onsubmit = event => {
+  event.preventDefault()
+  offer(document.getElementById("key").value.trim()).then(refuse)
+}
+const carried = new URLSearchParams(location.hash.slice(1)).get({{.Param}})
+if (carried) offer(carried).then(refuse)
+</script>
+</body>
+</html>

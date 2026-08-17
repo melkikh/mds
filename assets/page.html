@@ -1,5 +1,5 @@
 <!doctype html>
-<html{{if .Stale}} data-stale{{end}}>
+<html{{if .Stale}} data-stale{{end}}{{if .Tree}} data-tree{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,12 +8,26 @@
 <link rel="icon" href="/_static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/_static/app.css">
 <script nonce="{{.Nonce}}">document.documentElement.dataset.theme = localStorage.mdsTheme ||
-  (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")</script>
+  (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+const mdsTitle = document.title
+const mdsHidden = () => { try { return JSON.parse(localStorage.mdsHidden || "[]") } catch { return [] } }
+const mdsCovered = path => mdsHidden().some(dir => path === "/" + dir || path.startsWith("/" + dir + "/"))
+const mdsConceal = () => {
+  if (!mdsCovered(location.pathname)) return
+  sessionStorage.mdsAway = "1"
+  document.documentElement.dataset.concealed = ""
+  document.title = "mds"
+}
+// only what was left behind stays covered: a page opened while you are here shows itself,
+// one that reloaded or opened while you were away does not
+if (sessionStorage.mdsAway === "1" || document.hidden) mdsConceal()
+if (localStorage.mdsTree === "closed") delete document.documentElement.dataset.tree</script>
 </head>
 <body>
 <button id="theme-toggle" title="Toggle theme">&#9686;</button>
-{{if .Path}}<button id="edit" title="Open in editor" data-path="{{.Path}}">&#9998;</button>{{end}}
-{{if .Tree}}<button id="burger" title="Files">&#8801;</button><aside id="tree" hidden></aside>{{end}}
+{{if .Path}}<button id="edit" title="Open in editor" data-path="{{.Path}}">&#9998;</button>
+<button id="copy-file" title="Copy the whole file as markdown" data-path="{{.Path}}">&#10697;</button>{{end}}
+{{if .Tree}}<button id="burger" title="Files">&#8801;</button><aside id="tree"></aside>{{end}}
 <main>{{.Content}}</main>
 {{if .Mermaid}}<script nonce="{{.Nonce}}" src="/_static/mermaid.min.js"></script>{{end}}
 <script nonce="{{.Nonce}}" src="/_static/app.js"></script>

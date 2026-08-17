@@ -20,28 +20,91 @@ document.getElementById('theme-toggle').onclick = () => {
   if (!offline() && document.querySelector('.mermaid')) location.reload()
 }
 
-const escape = text => text.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))
+const escape = text => text.replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]))
+
+const flash = (button, state) => {
+  button.dataset[state] = ''
+  setTimeout(() => delete button.dataset[state], 900)
+}
+
+const here = decodeURI(location.pathname)
+let mounts = 1
 
 const branch = nodes => nodes.map(node => {
-  if (node.type === 'file') return `<a href="${encodeURI('/' + node.path)}">${escape(node.name)}</a>`
+  if (node.type === 'file') {
+    return `<a href="${encodeURI('/' + node.path)}"${'/' + node.path === here ? ' class="here"' : ''}>` +
+      `${escape(node.name)}</a>`
+  }
   const isRoot = node.type === 'root'
-  const drop = isRoot ? `<button class="drop" title="Stop serving this" data-root="${escape(node.path)}">&#10005;</button>` : ''
-  return `<details open${isRoot ? ' class="root"' : ''}><summary>${escape(node.name)}${drop}</summary>` +
-    `${branch(node.children || [])}</details>`
+  const drop = isRoot && mounts > 1
+    ? `<button class="drop" title="Stop serving this" data-root="${escape(node.path)}">&#10005;</button>` : ''
+  const hidden = mdsHidden().includes(node.path)
+  const hide = `<button class="hide" data-dir="${escape(node.path)}"` +
+    ` title="${hidden ? 'Show this by default' : 'Hide this until clicked'}">${hidden ? '&#9673;' : '&#9678;'}</button>`
+  return `<details open${isRoot ? ' class="root"' : ''}><summary${hidden ? ' data-hidden' : ''}>` +
+    `${escape(node.name)}${drop}${hide}</summary>${branch(node.children || [])}</details>`
 }).join('')
 
 const edit = document.getElementById('edit')
 if (edit) {
   edit.onclick = async () => {
     if ((await post('/_edit?path=' + encodeURIComponent(edit.dataset.path))).ok) return
-    edit.dataset.failed = ''
-    setTimeout(() => delete edit.dataset.failed, 900)
+    flash(edit, 'failed')
   }
 }
 
+const copyFile = document.getElementById('copy-file')
+if (copyFile) {
+  copyFile.onclick = async () => {
+    const source = fetch('/_raw?path=' + encodeURIComponent(copyFile.dataset.path))
+      .then(response => response.ok ? response.text() : Promise.reject(response.status))
+    try {
+      // safari drops the user gesture across an await, so hand it the pending text instead
+      if (window.ClipboardItem) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain': source.then(text => new Blob([text], { type: 'text/plain' })),
+        })])
+      } else {
+        await navigator.clipboard.writeText(await source)
+      }
+      flash(copyFile, 'done')
+    } catch {
+      flash(copyFile, 'failed')
+    }
+  }
+}
+
+const front = document.querySelector('details.frontmatter')
+if (front) {
+  front.open = localStorage.mdsFrontmatter === '1'
+  front.ontoggle = () => front.open ? localStorage.mdsFrontmatter = '1' : delete localStorage.mdsFrontmatter
+}
+
+const veil = document.createElement('button')
+veil.id = 'veil'
+veil.innerHTML = '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.4" stroke-linecap="round"><path d="M2 12s4-6.5 10-6.5S22 12 22 12s-4 6.5-10 6.5S2 12 2 12Z"/>' +
+  '<circle cx="12" cy="12" r="3"/><line x1="4" y1="20" x2="20" y2="4"/></svg>click to show'
+document.body.append(veil)
+veil.onclick = () => {
+  delete sessionStorage.mdsAway
+  delete root.dataset.concealed
+  document.title = mdsTitle
+}
+addEventListener('blur', mdsConceal)
+document.addEventListener('visibilitychange', () => document.hidden && mdsConceal())
+
+// sitting on an uncovered page with the window in hand ends the trip away
+const arrive = () => {
+  if (!('concealed' in root.dataset) && document.hasFocus()) delete sessionStorage.mdsAway
+}
+addEventListener('focus', arrive)
+arrive()
+
 const content = document.querySelector('main')
 
-content.querySelectorAll('pre:not(.mermaid):not(.frontmatter)').forEach(pre => {
+content.querySelectorAll('pre:not(.mermaid)').forEach(pre => {
+  if (pre.closest('.frontmatter')) return
   const block = document.createElement('div')
   const button = document.createElement('button')
   button.textContent = 'copy'
@@ -68,25 +131,36 @@ if (burger) {
   const tree = document.getElementById('tree')
   const showTree = async () => {
     const data = await (await fetch('/_tree')).json()
+    mounts = (data.nodes || []).length
     tree.innerHTML = branch(data.nodes || [])
-    tree.hidden = false
   }
   burger.onclick = () => {
-    if (!tree.hidden) {
-      delete localStorage.mdsTree
-      tree.hidden = true
+    if ('tree' in root.dataset) {
+      delete root.dataset.tree
+      localStorage.mdsTree = 'closed'
       return
     }
-    localStorage.mdsTree = '1'
+    delete localStorage.mdsTree
+    root.dataset.tree = ''
     showTree()
   }
   tree.onclick = event => {
     const drop = event.target.closest('.drop')
-    if (!drop) return
+    if (drop) {
+      event.preventDefault()
+      post('/_drop?root=' + encodeURIComponent(drop.dataset.root))
+      return
+    }
+    const hide = event.target.closest('.hide')
+    if (!hide) return
     event.preventDefault()
-    post('/_drop?root=' + encodeURIComponent(drop.dataset.root))
+    const dir = hide.dataset.dir
+    const marked = mdsHidden().filter(known => known !== dir)
+    if (marked.length === mdsHidden().length) marked.push(dir)
+    localStorage.mdsHidden = JSON.stringify(marked)
+    showTree()
   }
-  if (localStorage.mdsTree) showTree()
+  if ('tree' in root.dataset) showTree()
 }
 
 if (window.mermaid) mermaid.initialize({ startOnLoad: true, theme: root.dataset.theme === 'dark' ? 'dark' : 'default' })

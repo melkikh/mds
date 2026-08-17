@@ -30,7 +30,7 @@ usage:
   path               file or directory to serve (default ".")
   -d, --depth N      max directory depth, 0 = root only, -1 = unlimited (default 5)
   -s, --skip NAMES   comma-separated directory names to skip (default "node_modules,vendor,dist,build,target")
-  -b, --background   serve in a detached process, print the URL and exit
+  -f, --foreground   keep the server in this terminal instead of detaching
       --new          start a separate server instead of reusing the running one
       --no-open      do not open a browser, just print the URL
       --stop         stop every running server
@@ -40,13 +40,31 @@ usage:
 
   MDS_EDITOR         command the pencil button runs, e.g. "code -g" (default: system opener)
                      quote a path that has spaces: "\"C:\\Program Files\\ed.exe\" -g"
+  MDS_PORT           port to serve on (default ` + defaultPort + `)
+  MDS_REMOTE_IMAGES  1 allows images from other hosts, 0 blocks them (default 0), so a file
+                     someone else wrote cannot phone home the moment you open it
 
+mds serves in a detached process, prints the URL and exits, so it never blocks the shell.
 A second mds adds its path to the server that is already running and prints the URL of
-that page; the sidebar of the open tab picks it up. Running under a coding agent
-(Claude Code, Codex, ...) implies --background.
+that page; the sidebar of the open tab picks it up. Each root is served under its own
+directory name, e.g. /notes/todo.md.
+
+The url carries a one-off key after the #, which the page trades for a cookie. Open the
+whole url, key and all: without it every page is a locked screen. The key changes with
+every server, and nothing but the browser it was opened in can read your files.
 `
 
-const sharedPort = "8080"
+const (
+	defaultPort = "6337"
+	portEnv     = "MDS_PORT"
+)
+
+func sharedPort() string {
+	if port := os.Getenv(portEnv); port != "" {
+		return port
+	}
+	return defaultPort
+}
 
 var defaultSkip = []string{"node_modules", "vendor", "dist", "build", "target"}
 
@@ -54,7 +72,7 @@ type options struct {
 	target     string
 	depth      int
 	skip       []string
-	background bool
+	foreground bool
 	fresh      bool
 	noOpen     bool
 }
@@ -79,7 +97,7 @@ func main() {
 			return
 		}
 	}
-	if os.Getenv(childEnv) == "" && (opts.background || agent != "") {
+	if os.Getenv(childEnv) == "" && !opts.foreground {
 		detach(agent)
 		return
 	}
@@ -90,15 +108,21 @@ func main() {
 			announce(page, agent, tabs, opts)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort, port)
+		fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort(), port)
 	}
-	s := newServer(newRoot(abs, info.IsDir(), ""), opts)
-	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
+	s := newServer(newRoot(abs, info.IsDir()), opts)
+	httpServer := &http.Server{
+		Handler:           s.routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 	s.port, s.shutdown = port, func() { _ = httpServer.Close() }
 	addInstance(port, s.token)
-	fmt.Println(s.origin())
+	entrance := s.link(s.home())
+	fmt.Println(entrance)
 	if !opts.noOpen {
-		_ = openExternal(s.origin())
+		_ = openExternal(entrance)
 	}
 	go s.watch()
 	if err := httpServer.Serve(listener); err != http.ErrServerClosed {
@@ -152,7 +176,9 @@ func parseArgs(args []string) (options, error) {
 			stopRunning()
 			os.Exit(0)
 		case "-b", "--background":
-			opts.background = true
+			// detaching is the default now, the flag stays so old habits keep working
+		case "-f", "--foreground":
+			opts.foreground = true
 		case "--new":
 			opts.fresh = true
 		case "--no-open":
@@ -176,8 +202,9 @@ func parseArgs(args []string) (options, error) {
 }
 
 func listen() (net.Listener, string, bool) {
-	if l, err := net.Listen("tcp", "127.0.0.1:"+sharedPort); err == nil {
-		return l, sharedPort, true
+	shared := sharedPort()
+	if l, err := net.Listen("tcp", "127.0.0.1:"+shared); err == nil {
+		return l, shared, true
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

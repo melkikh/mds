@@ -14,42 +14,37 @@ Needs `$(go env GOPATH)/bin` in your `PATH`.
 
 ```
 mds plan.md             one file
-mds                     current dir, md files behind the burger button
+mds                     the current directory
 mds docs -d 2
 ```
 
-Prints the URL and opens a browser. Edit the file, the page reloads itself.
-
-Run mds again with another path and it does not start a second server: the path joins the
-sidebar of the page that is already open, and the printed URL points straight at it.
+Prints a URL, opens a browser and exits — the server stays behind, the terminal stays yours.
+Edit the file and the page reloads itself. `mds --stop` when you are done. Run mds again with
+another path and it joins the page already open. The URL carries a one-off key, so pass it
+around whole.
 
 ```
 -d, --depth N      how deep to walk, 0 is root only, -1 unlimited (default 5)
 -s, --skip NAMES   dirs to ignore (default node_modules,vendor,dist,build,target)
--b, --background   serve detached, print the URL and exit
+-f, --foreground   keep the server in this terminal instead of detaching
     --new          start a separate server instead of joining the running one
     --no-open      do not open a browser, just print the URL
     --stop         stop every running server
     --skill        print a skill file that teaches a coding agent to use mds
 -h, --help
+
+MDS_PORT           port number, e.g. 9000 (default 6337)
+MDS_EDITOR         what the pencil button opens, e.g. "code -g"
+MDS_REMOTE_IMAGES  1 lets a document load images from other hosts, 0 blocks them (default 0)
 ```
 
-Started by a coding agent (Claude Code, Codex, ...) mds detaches on its own, so the agent
-does not sit there waiting for a server that never exits.
+## For coding agents
 
-To have an agent reach for mds without being told, put the skill file wherever that agent
-keeps its instructions — every one of them has a different place and format, so redirect it
-yourself rather than guess:
+`mds --skill` prints a skill file that teaches an agent to show you a rendered file instead
+of pasting it into the chat. Every agent keeps its instructions somewhere else, so redirect
+it yourself:
 
 ```
 mkdir -p ~/.claude/skills/mds && mds --skill > ~/.claude/skills/mds/SKILL.md
 mds --skill >> ~/.codex/AGENTS.md
 ```
-
-Dot-directories are always skipped.
-
-## In the page
-
-Code blocks have a copy button. The pencil opens the file in your editor, set `MDS_EDITOR="code -g"` to pick one.
-
-GFM (tables, task lists, strikethrough), syntax highlighting and mermaid diagrams — nothing to configure.

@@ -3,6 +3,8 @@ package main
 import (
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +65,7 @@ func TestDetachedServer(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	launcher := exec.Command(binary, "-b", "--new", "--no-open", fixture(t))
+	launcher := exec.Command(binary, "--new", "--no-open", fixture(t))
 	cache := t.TempDir()
 	launcher.Env = append(os.Environ(), "CLAUDECODE=1", "HOME="+cache, "XDG_CACHE_HOME="+cache, "LOCALAPPDATA="+cache)
 	stdout, err := launcher.StdoutPipe()
@@ -89,25 +91,57 @@ func TestDetachedServer(t *testing.T) {
 	select {
 	case leftover := <-drained:
 		if len(leftover) > 0 {
-			t.Errorf("mds -b wrote to stderr: %s", leftover)
+			t.Errorf("mds wrote to stderr: %s", leftover)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("stderr never reached EOF: the detached server still holds the pipe it inherited, " +
 			"so an agent reading stderr to the end would block for as long as the server runs")
 	}
 	if err := launcher.Wait(); err != nil {
-		t.Fatalf("mds -b did not exit: %v", err)
+		t.Fatalf("mds did not exit on its own: %v", err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(printed)), "\n")
-	url := lines[0]
-	if !strings.HasPrefix(url, "http://127.0.0.1:") {
-		t.Fatalf("first stdout line = %q, want a URL", url)
+	home, fragment, _ := strings.Cut(lines[0], "#")
+	key := strings.TrimPrefix(fragment, tokenParam+"=")
+	if !strings.HasPrefix(home, "http://127.0.0.1:") {
+		t.Fatalf("first stdout line = %q, want a URL", lines[0])
+	}
+	if key == "" || key == fragment {
+		t.Fatalf("printed url = %q, want it to carry the key in the fragment", lines[0])
 	}
 	if !strings.Contains(string(printed), "does not block") {
 		t.Errorf("agent hint missing from stdout:\n%s", printed)
 	}
-	response, err := http.Get(url + "/docs/intro.md")
+	page := home + "/docs/intro.md"
+	locked, err := http.Get(page)
+	if err != nil {
+		t.Fatalf("detached server unreachable: %v", err)
+	}
+	locked.Body.Close()
+	if locked.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET %s without the key = %d, want 401", page, locked.StatusCode)
+	}
+	// walk in the way a browser does: hand the key to /_auth, keep the cookie it gives back
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := &http.Client{Jar: jar}
+	origin, err := url.Parse(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin.Path = "/_auth"
+	unlocked, err := browser.Post(origin.String(), "text/plain", strings.NewReader(key))
+	if err != nil {
+		t.Fatalf("detached server unreachable: %v", err)
+	}
+	unlocked.Body.Close()
+	if unlocked.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /_auth with the printed key = %d, want 204", unlocked.StatusCode)
+	}
+	response, err := browser.Get(page)
 	if err != nil {
 		t.Fatalf("detached server unreachable: %v", err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"html/template"
 	"slices"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ func renderHTML(source string) string {
 func TestRenderFrontmatter(t *testing.T) {
 	html := renderHTML("---\nname: mds\ndescription: |\n  first line\n\n  after a blank line\ntools:\n  - Bash\n  - Sed\n---\n\n# Title\n")
 	for _, want := range []string{
-		`<pre class="frontmatter">`,
+		`<details class="frontmatter"><summary title="frontmatter">{ }</summary><pre>`,
 		"name: mds\ndescription: |\n  first line\n\n  after a blank line\ntools:\n  - Bash\n  - Sed",
 		`<h1 id="title">Title</h1>`,
 	} {
@@ -92,6 +93,24 @@ func TestRenderFrontmatter(t *testing.T) {
 	}
 	if got := renderHTML("---\n---\n\n# Title\n"); strings.Contains(got, "frontmatter") {
 		t.Errorf("empty frontmatter should render nothing:\n%s", got)
+	}
+}
+
+func TestFrontmatterSummary(t *testing.T) {
+	for _, block := range []string{
+		"name: mds\n",
+		"title: whatever the file starts with\n",
+		"- one\n- two\n",
+		"name: <script>\n",
+	} {
+		html := renderHTML("---\n" + block + "---\n\n# Title\n")
+		summary, _, _ := strings.Cut(html, "</summary>")
+		if _, label, _ := strings.Cut(summary, "<summary"); label != ` title="frontmatter">{ }` {
+			t.Errorf("render(%q) folds to %q, want a fixed { } and none of the yaml", block, label)
+		}
+		if !strings.Contains(html, "<pre>"+template.HTMLEscapeString(block[:len(block)-1])+"</pre>") {
+			t.Errorf("render(%q) lost the block itself:\n%s", block, html)
+		}
 	}
 }
 

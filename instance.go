@@ -9,9 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// maxLink caps the url another mds may hand back: it gets printed and opened, not parsed.
+const maxLink = 2048
 
 type instance struct {
 	port  string
@@ -61,6 +65,8 @@ func addInstance(port, token string) {
 	if dir == "" || os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
+	// MkdirAll leaves an existing directory as it found it, and this one holds keys
+	_ = os.Chmod(dir, 0o700)
 	_ = os.WriteFile(filepath.Join(dir, port), []byte(token), 0o600)
 }
 
@@ -85,8 +91,13 @@ func postAdd(running instance, target string) (page string, tabs int, alive, add
 		return "", 0, !errors.Is(err, syscall.ECONNREFUSED), false
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxLink))
 	if err != nil || response.StatusCode != http.StatusOK {
+		return "", 0, true, false
+	}
+	// whatever answered gets printed and handed to the system opener, so take a url from
+	// it only if it is the url of the server we meant to talk to
+	if !strings.HasPrefix(string(body), running.origin()+"/") {
 		return "", 0, true, false
 	}
 	open, _ := strconv.Atoi(response.Header.Get(tabsHeader))

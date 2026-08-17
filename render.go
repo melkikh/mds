@@ -55,11 +55,14 @@ func render(source []byte) (template.HTML, bool) {
 	return template.HTML(head + mermaidBlock.ReplaceAllString(body, `<pre class="mermaid">$1</pre>`)), diagrams
 }
 
+// renderFrontmatter folds the block behind a fixed { }, never behind a line of the yaml
+// itself: what stands there would otherwise be whatever the file happens to start with.
 func renderFrontmatter(block string) string {
 	if strings.TrimSpace(block) == "" {
 		return ""
 	}
-	return `<pre class="frontmatter">` + template.HTMLEscapeString(block) + "</pre>"
+	return `<details class="frontmatter"><summary title="frontmatter">{ }</summary><pre>` +
+		template.HTMLEscapeString(block) + "</pre></details>"
 }
 
 func scan(root string, depth int, skip []string) (dirs, files []string) {

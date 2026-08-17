@@ -1,4 +1,5 @@
 :root {
+  --tree: 280px;
   --bg: #ffffff;
   --fg: #24292f;
   --muted: #6e7781;
@@ -59,11 +60,28 @@ li > ul, li > ol { margin-bottom: 0; }
   margin: 0 0 2em;
   font-size: 13px;
   color: var(--muted);
+  border-left: 3px solid var(--border);
+  padding-left: 14px;
+}
+
+.frontmatter > summary {
+  width: fit-content;
+  padding: 2px 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.frontmatter > summary:hover { color: var(--fg); }
+.frontmatter[open] > summary { margin-bottom: 4px; }
+
+.frontmatter > pre {
+  margin: 0;
+  padding: 2px 0;
+  font-size: 13px;
   background: none;
   border: 0;
-  border-left: 3px solid var(--border);
   border-radius: 0;
-  padding: 2px 0 2px 14px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -132,7 +150,7 @@ img { max-width: 100%; }
 input[type="checkbox"] { margin-right: .4em; }
 ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
 
-#theme-toggle, #burger, #edit {
+#theme-toggle, #burger, #edit, #copy-file {
   position: fixed;
   top: 12px;
   z-index: 2;
@@ -149,18 +167,49 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
   cursor: pointer;
 }
 
-#theme-toggle:hover, #burger:hover, #edit:hover { opacity: 1; }
+#theme-toggle:hover, #burger:hover, #edit:hover, #copy-file:hover { opacity: 1; }
 #theme-toggle { right: 12px; }
+#burger { left: 12px; z-index: 4; }
 #edit { right: 48px; }
-#edit[data-failed] { color: var(--kw); border-color: var(--kw); opacity: 1; }
-#burger { left: 12px; }
+#copy-file { right: 84px; }
+#edit[data-failed], #copy-file[data-failed] { color: var(--kw); border-color: var(--kw); opacity: 1; }
+#copy-file[data-done] { color: var(--accent); border-color: var(--accent); opacity: 1; }
+
+#veil {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 0;
+  cursor: pointer;
+}
+
+#veil svg { opacity: .55; }
+#veil:hover svg { opacity: .9; }
+
+[data-concealed] #veil { display: flex; }
+[data-concealed] main { visibility: hidden; }
+[data-concealed][data-tree] #veil { left: var(--tree); }
+
+@media (max-width: 760px) {
+  [data-concealed][data-tree] #veil { left: 0; }
+}
 
 #tree {
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 1;
-  width: 280px;
+  z-index: 4;
+  display: none;
+  width: var(--tree);
   height: 100vh;
   padding: 52px 12px 24px;
   overflow: auto;
@@ -169,7 +218,12 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
   border-right: 1px solid var(--border);
 }
 
-#tree[hidden] { display: none; }
+[data-tree] #tree { display: block; }
+[data-tree] body { padding-left: var(--tree); }
+
+@media (max-width: 760px) {
+  [data-tree] body { padding-left: 0; }
+}
 
 [data-offline] #burger, [data-offline] #edit { opacity: .15; pointer-events: none; }
 
@@ -192,7 +246,7 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
 #tree details.root { padding-left: 0; margin-top: 10px; }
 #tree details.root > summary { color: var(--fg); font-weight: 600; }
 
-#tree .drop {
+#tree .drop, #tree .hide {
   float: right;
   padding: 0 2px;
   font-size: 12px;
@@ -204,10 +258,14 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
   cursor: pointer;
 }
 
-#tree summary:hover .drop { opacity: 1; }
+#tree summary:hover .drop, #tree summary:hover .hide { opacity: 1; }
 #tree .drop:hover { color: var(--kw); }
+#tree .hide:hover { color: var(--fg); }
+#tree summary[data-hidden] { font-style: italic; }
+#tree summary[data-hidden] .hide { opacity: 1; color: var(--accent); }
 #tree summary { color: var(--muted); cursor: pointer; padding: 2px 0; }
 #tree a { display: block; padding: 2px 0 2px 14px; white-space: nowrap; }
+#tree a.here { color: var(--fg); font-weight: 600; }
 
 .chroma .k, .chroma .kc, .chroma .kd, .chroma .kn, .chroma .kp, .chroma .kr, .chroma .ow { color: var(--kw); }
 .chroma .s, .chroma .s1, .chroma .s2, .chroma .sa, .chroma .sb, .chroma .sc, .chroma .sd,
