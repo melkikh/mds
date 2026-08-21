@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -33,6 +35,8 @@ usage:
   -f, --foreground   keep the server in this terminal instead of detaching
       --new          start a separate server instead of reusing the running one
       --no-open      do not open a browser, just print the URL
+      --service ACT  the server that starts at login: install, remove, status,
+                     restart it, or run one here and now
       --stop         stop every running server
       --skill        print a skill file teaching a coding agent to use mds;
                      redirect it into wherever your agent keeps its instructions
@@ -49,14 +53,21 @@ A second mds adds its path to the server that is already running and prints the 
 that page; the sidebar of the open tab picks it up. Each root is served under its own
 directory name, e.g. /notes/todo.md.
 
+mds --service install puts mds in the login items of your session. From the next login a
+server is already there, serving nothing and holding the port, so mds <path> only ever has
+a path to hand it. --service status says whether that is on and prints the url of whatever
+is listening; --service remove takes it out again.
+
 The url carries a one-off key after the #, which the page trades for a cookie. Open the
 whole url, key and all: without it every page is a locked screen. The key changes with
 every server, and nothing but the browser it was opened in can read your files.
 `
 
 const (
-	defaultPort = "6337"
-	portEnv     = "MDS_PORT"
+	defaultPort  = "6337"
+	defaultDepth = 5
+	portEnv      = "MDS_PORT"
+	editorEnv    = "MDS_EDITOR"
 )
 
 func sharedPort() string {
@@ -75,12 +86,27 @@ type options struct {
 	foreground bool
 	fresh      bool
 	noOpen     bool
+	service    string
 }
 
 func main() {
 	opts, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fatal(err)
+	}
+	if opts.service != "" {
+		if opts.service != serviceRun {
+			if err := runService(opts); err != nil {
+				fatal(err)
+			}
+			return
+		}
+		if os.Getenv(childEnv) == "" && !opts.foreground {
+			detach("")
+			return
+		}
+		serve(nil, opts)
+		return
 	}
 	abs, err := filepath.Abs(opts.target)
 	if err != nil {
@@ -90,27 +116,42 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	agent := detectAgent()
 	if !opts.fresh {
 		if page, tabs, ok := addToRunning(abs); ok {
-			announce(page, agent, tabs, opts)
+			announce(page, detectAgent(), tabs, opts)
 			return
 		}
 	}
 	if os.Getenv(childEnv) == "" && !opts.foreground {
-		detach(agent)
+		detach(detectAgent())
 		return
 	}
+	serve(newRoot(abs, info.IsDir()), opts)
+}
+
+// serve is the server itself: first is the path it opens with, or nothing at all when this
+// is the login server waiting for one.
+func serve(first *root, opts options) {
 	listener, port, claimed := listen()
-	if !claimed && !opts.fresh {
-		if page, tabs, ok := joinHolder(abs); ok {
-			_ = listener.Close()
-			announce(page, agent, tabs, opts)
-			return
+	if !claimed {
+		switch {
+		case first == nil:
+			if holdsPort() {
+				_ = listener.Close()
+				fmt.Fprintf(os.Stderr, "mds: port %s already has an mds on it\n", sharedPort())
+				return
+			}
+			fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort(), port)
+		case !opts.fresh:
+			if page, tabs, ok := joinHolder(first.target()); ok {
+				_ = listener.Close()
+				announce(page, detectAgent(), tabs, opts)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort(), port)
 		}
-		fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort(), port)
 	}
-	s := newServer(newRoot(abs, info.IsDir()), opts)
+	s := newServer(first, opts)
 	httpServer := &http.Server{
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -119,6 +160,7 @@ func main() {
 	}
 	s.port, s.shutdown = port, func() { _ = httpServer.Close() }
 	addInstance(port, s.token)
+	onSignal(s.shutdown)
 	entrance := s.link(s.home())
 	fmt.Println(entrance)
 	if !opts.noOpen {
@@ -129,6 +171,19 @@ func main() {
 		fatal(err)
 	}
 	dropInstance(port)
+}
+
+// onSignal closes the server when the system asks the process to go away. launchd and
+// systemd end a login server that way at every logout, and an entry in the instances file
+// must not outlive the port it names.
+func onSignal(shutdown func()) chan<- os.Signal {
+	asked := make(chan os.Signal, 1)
+	signal.Notify(asked, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-asked
+		shutdown()
+	}()
+	return asked
 }
 
 func announce(page, agent string, tabs int, opts options) {
@@ -159,7 +214,7 @@ func fatal(err error) {
 }
 
 func parseArgs(args []string) (options, error) {
-	opts := options{target: ".", depth: 5, skip: defaultSkip}
+	opts := options{target: ".", depth: defaultDepth, skip: defaultSkip}
 	for i := 0; i < len(args); i++ {
 		value := ""
 		if i+1 < len(args) {
@@ -183,6 +238,14 @@ func parseArgs(args []string) (options, error) {
 			opts.fresh = true
 		case "--no-open":
 			opts.noOpen = true
+		case "--service":
+			if !slices.Contains(serviceActions, value) {
+				return opts, fmt.Errorf("--service takes one of %s, not %q", spokenList(serviceActions), value)
+			}
+			opts.service = value
+			// nobody is at the keyboard when a login server starts
+			opts.noOpen = opts.noOpen || value == serviceRun
+			i++
 		case "-d", "--depth":
 			if n, err := strconv.Atoi(value); err == nil {
 				opts.depth = n

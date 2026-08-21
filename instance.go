@@ -85,7 +85,23 @@ func call(running instance, path string) (*http.Response, error) {
 	return talk.Do(request)
 }
 
-func postAdd(running instance, target string) (page string, tabs int, alive, added bool) {
+// alive tells whether the port in the instances file still has an mds behind it, one that
+// answers to the token written down beside it.
+func alive(running instance) bool {
+	request, err := http.NewRequest(http.MethodGet, running.origin()+"/_tree", nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set(tokenHeader, running.token)
+	response, err := talk.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode == http.StatusOK
+}
+
+func postAdd(running instance, target string) (page string, tabs int, up, added bool) {
 	response, err := call(running, "/_add?path="+url.QueryEscape(target))
 	if err != nil {
 		return "", 0, !errors.Is(err, syscall.ECONNREFUSED), false
@@ -106,8 +122,8 @@ func postAdd(running instance, target string) (page string, tabs int, alive, add
 
 func addToRunning(target string) (page string, tabs int, ok bool) {
 	for _, running := range readInstances() {
-		page, tabs, alive, added := postAdd(running, target)
-		if !alive {
+		page, tabs, up, added := postAdd(running, target)
+		if !up {
 			dropInstance(running.port)
 			continue
 		}

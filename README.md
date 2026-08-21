@@ -20,8 +20,9 @@ mds docs -d 2
 
 Prints a URL, opens a browser and exits — the server stays behind, the terminal stays yours.
 Edit the file and the page reloads itself. `mds --stop` when you are done. Run mds again with
-another path and it joins the page already open. The URL carries a one-off key, so pass it
-around whole.
+another path and it joins the page already open, and `mds --service install` puts an empty
+server in your login items so there is always one to join. The URL carries a one-off key, so
+pass it around whole.
 
 ```
 -d, --depth N      how deep to walk, 0 is root only, -1 unlimited (default 5)
@@ -29,6 +30,7 @@ around whole.
 -f, --foreground   keep the server in this terminal instead of detaching
     --new          start a separate server instead of joining the running one
     --no-open      do not open a browser, just print the URL
+    --service ACT  the server that starts at login: install, remove, status, restart, run
     --stop         stop every running server
     --skill        print a skill file that teaches a coding agent to use mds
 -h, --help

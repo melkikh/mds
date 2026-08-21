@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -695,6 +696,36 @@ func TestServeAdd(t *testing.T) {
 	}
 }
 
+func TestLoginServerWaitsWithNothingMounted(t *testing.T) {
+	s := newServer(nil, options{depth: defaultDepth, skip: defaultSkip})
+	s.port = "8080"
+	if got := s.home(); got != "/" {
+		t.Errorf("home() = %q with nothing mounted, want /, or the url mds prints leads nowhere", got)
+	}
+	status, body := get(t, s, "/")
+	if status != http.StatusOK {
+		t.Fatalf("GET / = %d with nothing mounted, want 200 rather than a redirect to itself", status)
+	}
+	if !strings.Contains(body, "mds &lt;path&gt;") {
+		t.Errorf("the waiting page says nothing about what to do next:\n%s", body)
+	}
+	if strings.Contains(body, `id="burger"`) {
+		t.Error("the waiting page offers a file tree, and there is not a file in it")
+	}
+	if status, _ := get(t, s, "/_tree"); status != http.StatusOK {
+		t.Errorf("GET /_tree = %d with nothing mounted, want 200: --service status asks every server for it", status)
+	}
+	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
+	if status, _ := post(t, s, "/_add?path="+url.QueryEscape(plan)); status != http.StatusOK {
+		t.Fatalf("POST /_add = %d, want the login server to take the first path it is handed", status)
+	}
+	recorder := request(t, s, http.MethodGet, "/")
+	if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != s.roots[0].page("plan.md") {
+		t.Errorf("GET / = %d to %q, want a redirect to the path just added",
+			recorder.Code, recorder.Header().Get("Location"))
+	}
+}
+
 func TestAddSendsAnOpenTabToTheNewPage(t *testing.T) {
 	s := testServer(t, fixture(t), "")
 	s.port = "8080"
@@ -743,6 +774,18 @@ func TestServeStop(t *testing.T) {
 	}
 	if len(readInstances()) != 0 {
 		t.Error("/_stop left the instance behind in the state file")
+	}
+}
+
+func TestSignalStopsTheServerTheWayStopDoes(t *testing.T) {
+	closed := make(chan struct{})
+	asked := onSignal(func() { close(closed) })
+	asked <- syscall.SIGTERM
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("SIGTERM left the server running, so a logout would kill a login server " +
+			"with its port still written down, and the next mds would try that port first")
 	}
 }
 

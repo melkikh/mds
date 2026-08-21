@@ -113,9 +113,11 @@ type server struct {
 	subs map[chan string]struct{}
 }
 
+// newServer takes the root mds was started on, or nil: the login server opens with nothing
+// mounted and waits for the first mds <path> to hand it one.
 func newServer(first *root, opts options) *server {
 	s := &server{
-		roots:    []*root{first},
+		roots:    []*root{},
 		assigned: map[string]string{},
 		depth:    opts.depth,
 		skip:     opts.skip,
@@ -128,14 +130,21 @@ func newServer(first *root, opts options) *server {
 		trees:    map[string]*tree{},
 		subs:     map[chan string]struct{}{},
 	}
-	first.prefix = s.prefix(first.dir)
+	if first != nil {
+		first.prefix = s.prefix(first.dir)
+		s.roots = append(s.roots, first)
+	}
 	return s
 }
 
-// home is where a bare / lands: the first root's own page.
+// home is where a bare / lands: the first root's own page, or the empty page a server with
+// nothing mounted shows instead.
 func (s *server) home() string {
 	s.rootsMu.RLock()
 	defer s.rootsMu.RUnlock()
+	if len(s.roots) == 0 {
+		return "/"
+	}
 	return s.roots[0].page(s.roots[0].entry)
 }
 
@@ -195,6 +204,11 @@ func shortPath(dir string) string {
 		dir = "~" + strings.TrimPrefix(dir, home)
 	}
 	return filepath.ToSlash(dir)
+}
+
+// target is the path mds was given for this root, directory or single file.
+func (rt *root) target() string {
+	return filepath.Join(rt.dir, rt.entry)
 }
 
 func (rt *root) page(rel string) string {
@@ -375,9 +389,17 @@ func (s *server) resolve(target string) (*root, string) {
 	return nil, ""
 }
 
+// waiting is what a server with nothing mounted has to show for itself.
+const waiting = template.HTML(`<h1>mds</h1><p>nothing is open yet. ` +
+	`run <code>mds &lt;path&gt;</code> and it lands here.</p>`)
+
 func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" {
-		http.Redirect(w, r, s.home(), http.StatusFound)
+		if page := s.home(); page != "/" {
+			http.Redirect(w, r, page, http.StatusFound)
+			return
+		}
+		s.renderPage(w, view{status: http.StatusOK, title: "mds", content: waiting})
 		return
 	}
 	rt, rel := s.resolve(r.URL.Path)
@@ -465,7 +487,7 @@ func indexFile(dir string) string {
 
 func (s *server) renderPage(w http.ResponseWriter, v view) {
 	s.rootsMu.RLock()
-	tree := len(s.roots) > 1 || s.roots[0].entry == ""
+	tree := len(s.roots) > 1 || (len(s.roots) == 1 && s.roots[0].entry == "")
 	s.rootsMu.RUnlock()
 	nonce := rand.Text()
 	w.Header().Set("Content-Security-Policy", fmt.Sprintf(contentPolicy, nonce, imagePolicy()))
@@ -541,8 +563,12 @@ func (s *server) serveTree(w http.ResponseWriter, r *http.Request) {
 		prefixPaths(branch, rt.prefix)
 		nodes = append(nodes, &node{Type: "root", Name: shortPath(rt.dir), Path: rt.prefix, Children: branch})
 	}
+	name := ""
+	if len(roots) > 0 {
+		name = filepath.Base(roots[0].dir)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"root": filepath.Base(roots[0].dir), "nodes": nodes})
+	_ = json.NewEncoder(w).Encode(map[string]any{"root": name, "nodes": nodes})
 }
 
 func (s *server) rootFiles(rt *root) []string {
