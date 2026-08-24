@@ -1,5 +1,8 @@
 :root {
   --tree: 280px;
+  --rail: 28px;
+  --aside: var(--rail);
+  --column: 820px;
   --bg: #ffffff;
   --fg: #24292f;
   --muted: #6e7781;
@@ -39,13 +42,11 @@ body {
 }
 
 main {
-  max-width: 820px;
-  margin: auto;
   padding: 48px 24px 96px;
   overflow-wrap: break-word;
 }
 
-h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.6em 0 .6em; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.6em 0 .6em; scroll-margin-top: 16px; }
 h1 { font-size: 2em; }
 h1, h2 { padding-bottom: .3em; border-bottom: 1px solid var(--border); }
 main > h1:first-child { margin-top: 0; }
@@ -57,7 +58,7 @@ p, ul, ol, blockquote, table, pre { margin: 0 0 1em; }
 li > ul, li > ol { margin-bottom: 0; }
 
 .frontmatter {
-  margin: 0 0 2em;
+  margin-block: 0 2em;
   font-size: 13px;
   color: var(--muted);
   border-left: 3px solid var(--border);
@@ -92,7 +93,7 @@ blockquote {
   border-left: 3px solid var(--border);
 }
 
-hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+hr { border: 0; border-top: 1px solid var(--border); margin-block: 2em; }
 
 code, pre, kbd {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -116,7 +117,7 @@ pre {
 pre code { background: none; padding: 0; }
 pre.mermaid { background: none; border: 0; text-align: center; }
 
-.code-block { position: relative; margin: 0 0 1em; }
+.code-block { position: relative; margin-block: 0 1em; }
 .code-block pre { margin: 0; }
 
 .code-block button {
@@ -150,7 +151,19 @@ img { max-width: 100%; }
 input[type="checkbox"] { margin-right: .4em; }
 ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
 
-#theme-toggle, #burger, #edit, #copy-file {
+/* main is as wide as the window and the reading column is what gets capped, so a table or a
+   code block too wide for that column can keep growing into the margins instead of hiding
+   the rest of itself behind a horizontal scrollbar. Whatever fits stays where it was.
+   These two come last: they hand every block the auto side margins that centre it. */
+main > * { max-width: var(--column); margin-inline: auto; }
+
+main > table, main > .code-block {
+  width: fit-content;
+  min-width: min(100%, var(--column));
+  max-width: 100%;
+}
+
+#theme-toggle, #edit, #copy-file {
   position: fixed;
   top: 12px;
   z-index: 2;
@@ -167,9 +180,8 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
   cursor: pointer;
 }
 
-#theme-toggle:hover, #burger:hover, #edit:hover, #copy-file:hover { opacity: 1; }
+#theme-toggle:hover, #edit:hover, #copy-file:hover { opacity: 1; }
 #theme-toggle { right: 12px; }
-#burger { left: 12px; z-index: 4; }
 #edit { right: 48px; }
 #copy-file { right: 84px; }
 #edit[data-failed], #copy-file[data-failed] { color: var(--kw); border-color: var(--kw); opacity: 1; }
@@ -197,10 +209,17 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
 
 [data-concealed] #veil { display: flex; }
 [data-concealed] main { visibility: hidden; }
-[data-concealed][data-tree] #veil { left: var(--tree); }
+
+/* the sidebar never leaves: collapsed it is a rail with the arrow that brings it back, so
+   the way in and the way out sit in the same corner. --aside is whichever of the two it is. */
+[data-tree] { --aside: var(--tree); }
+
+body:has(#tree) { padding-left: var(--aside); }
+body:has(#tree) #veil { left: var(--aside); }
 
 @media (max-width: 760px) {
-  [data-concealed][data-tree] #veil { left: 0; }
+  [data-tree] body:has(#tree) { padding-left: var(--rail); }
+  [data-tree] body:has(#tree) #veil { left: var(--rail); }
 }
 
 #tree {
@@ -208,24 +227,39 @@ ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
   top: 0;
   left: 0;
   z-index: 4;
-  display: none;
-  width: var(--tree);
+  display: flex;
+  flex-direction: column;
+  width: var(--aside);
   height: 100vh;
-  padding: 52px 12px 24px;
-  overflow: auto;
   font-size: 14px;
   background: var(--panel);
   border-right: 1px solid var(--border);
 }
 
-[data-tree] #tree { display: block; }
-[data-tree] body { padding-left: var(--tree); }
+html:not([data-tree]) #tree { cursor: e-resize; }
 
-@media (max-width: 760px) {
-  [data-tree] body { padding-left: 0; }
+#files { flex: 1; padding: 16px 12px 8px; overflow: auto; }
+html:not([data-tree]) #files { display: none; }
+
+#tree-toggle {
+  flex: none;
+  align-self: flex-start;
+  /* the same corner in both states: with the file list gone there is nothing to push it down */
+  margin-top: auto;
+  width: var(--rail);
+  padding: 10px 0 14px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  opacity: .55;
+  cursor: pointer;
 }
 
-[data-offline] #burger, [data-offline] #edit { opacity: .15; pointer-events: none; }
+#tree-toggle:hover { color: var(--fg); opacity: 1; }
+#tree-toggle::before { content: "\25c2"; display: block; font-size: 13px; line-height: 1; transition: transform .2s; }
+html:not([data-tree]) #tree-toggle::before { transform: rotate(180deg); }
+
+[data-offline] #edit { opacity: .15; pointer-events: none; }
 
 [data-stale] body::after, [data-offline] body::after {
   position: fixed;

@@ -261,6 +261,15 @@ func TestMermaidLoadsOnlyWhereItIsUsed(t *testing.T) {
 	}
 }
 
+func TestSidebarCollapses(t *testing.T) {
+	s := testServer(t, fixture(t), "")
+	_, body := get(t, s, at(s, ""))
+	aside, _, ok := strings.Cut(body, "</aside>")
+	if !ok || !strings.Contains(aside, `id="tree-toggle"`) {
+		t.Errorf("the collapse arrow is not inside the sidebar, so collapsing it takes the way back with it:\n%s", body)
+	}
+}
+
 func TestServeContentDirMode(t *testing.T) {
 	s := testServer(t, fixture(t), "")
 	cases := []struct {
@@ -270,7 +279,7 @@ func TestServeContentDirMode(t *testing.T) {
 	}{
 		{"/", http.StatusFound, at(s, "")},
 		{at(s, ""), http.StatusOK, "Root"},
-		{at(s, ""), http.StatusOK, `id="burger"`},
+		{at(s, ""), http.StatusOK, `id="tree"`},
 		{at(s, "docs/intro.md"), http.StatusOK, "Intro"},
 		{at(s, "docs/intro.md"), http.StatusOK, `id="edit" title="Open in editor" data-path="` + at(s, "docs/intro.md") + `"`},
 		{at(s, "docs/api/spec.markdown"), http.StatusOK, "Spec"},
@@ -304,8 +313,8 @@ func TestServeContentFileMode(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(body, "Intro") {
 		t.Errorf("GET %s = %d, want 200 with the entry file", at(s, ""), status)
 	}
-	if strings.Contains(body, `id="burger"`) {
-		t.Error("file mode should not render the burger")
+	if strings.Contains(body, `id="tree"`) {
+		t.Error("file mode should not render the sidebar")
 	}
 }
 
@@ -419,7 +428,7 @@ func TestAddRoot(t *testing.T) {
 	if status, body := get(t, s, "/plans"); status != http.StatusOK || !strings.Contains(body, "Plan") {
 		t.Errorf("GET /plans = %d, want the entry of that root", status)
 	}
-	if _, body := get(t, s, "/plans/plan.md"); !strings.Contains(body, `id="burger"`) {
+	if _, body := get(t, s, "/plans/plan.md"); !strings.Contains(body, `id="tree"`) {
 		t.Error("a second root should bring the sidebar up")
 	}
 	if status, _ := get(t, s, "/nosuchroot/plan.md"); status != http.StatusNotFound {
@@ -709,7 +718,7 @@ func TestLoginServerWaitsWithNothingMounted(t *testing.T) {
 	if !strings.Contains(body, "mds &lt;path&gt;") {
 		t.Errorf("the waiting page says nothing about what to do next:\n%s", body)
 	}
-	if strings.Contains(body, `id="burger"`) {
+	if strings.Contains(body, `id="tree"`) {
 		t.Error("the waiting page offers a file tree, and there is not a file in it")
 	}
 	if status, _ := get(t, s, "/_tree"); status != http.StatusOK {

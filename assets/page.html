@@ -27,7 +27,8 @@ if (localStorage.mdsTree === "closed") delete document.documentElement.dataset.t
 <button id="theme-toggle" title="Toggle theme">&#9686;</button>
 {{if .Path}}<button id="edit" title="Open in editor" data-path="{{.Path}}">&#9998;</button>
 <button id="copy-file" title="Copy the whole file as markdown" data-path="{{.Path}}">&#10697;</button>{{end}}
-{{if .Tree}}<button id="burger" title="Files">&#8801;</button><aside id="tree"></aside>{{end}}
+{{if .Tree}}<aside id="tree"><nav id="files"></nav>
+<button id="tree-toggle" title="Files" aria-label="Files"></button></aside>{{end}}
 <main>{{.Content}}</main>
 {{if .Mermaid}}<script nonce="{{.Nonce}}" src="/_static/mermaid.min.js"></script>{{end}}
 <script nonce="{{.Nonce}}" src="/_static/app.js"></script>

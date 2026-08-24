@@ -126,25 +126,31 @@ content.onclick = event => {
   })
 }
 
-const burger = document.getElementById('burger')
-if (burger) {
-  const tree = document.getElementById('tree')
+const tree = document.getElementById('tree')
+if (tree) {
+  const files = document.getElementById('files')
   const showTree = async () => {
-    const data = await (await fetch('/_tree')).json()
-    mounts = (data.nodes || []).length
-    tree.innerHTML = branch(data.nodes || [])
-  }
-  burger.onclick = () => {
-    if ('tree' in root.dataset) {
-      delete root.dataset.tree
-      localStorage.mdsTree = 'closed'
-      return
+    try {
+      const data = await (await fetch('/_tree')).json()
+      mounts = (data.nodes || []).length
+      files.innerHTML = branch(data.nodes || [])
+    } catch {
+      // the server went away; the tree already on the page beats an empty one
     }
+  }
+  const expand = () => {
     delete localStorage.mdsTree
     root.dataset.tree = ''
     showTree()
   }
   tree.onclick = event => {
+    // collapsed, the whole rail is the way back in
+    if (!('tree' in root.dataset)) return expand()
+    if (event.target.closest('#tree-toggle')) {
+      delete root.dataset.tree
+      localStorage.mdsTree = 'closed'
+      return
+    }
     const drop = event.target.closest('.drop')
     if (drop) {
       event.preventDefault()

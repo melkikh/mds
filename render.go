@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"os"
@@ -10,10 +11,12 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
@@ -47,12 +50,51 @@ func render(source []byte) (template.HTML, bool) {
 		source = source[match[1]:]
 	}
 	var buf bytes.Buffer
-	if err := markdown.Convert(source, &buf); err != nil {
+	ids := parser.WithIDs(&anchors{used: map[string]bool{}})
+	if err := markdown.Convert(source, &buf, parser.WithContext(parser.NewContext(ids))); err != nil {
 		return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>"), false
 	}
 	body := buf.String()
 	diagrams := mermaidBlock.MatchString(body)
 	return template.HTML(head + mermaidBlock.ReplaceAllString(body, `<pre class="mermaid">$1</pre>`)), diagrams
+}
+
+// anchors names headings the way github does, because that is what the link in a table of
+// contents was written against. Goldmark's own generator walks the title a byte at a time
+// and throws away everything wider than ascii, so every russian heading in a document ends
+// up as id="-" and nothing in it can be jumped to.
+type anchors struct{ used map[string]bool }
+
+func (a *anchors) Generate(title []byte, kind ast.NodeKind) []byte {
+	slug := slugify(string(title))
+	if slug == "" {
+		slug = "heading"
+		if kind != ast.KindHeading {
+			slug = "id"
+		}
+	}
+	taken := slug
+	for n := 1; a.used[taken]; n++ {
+		taken = fmt.Sprintf("%s-%d", slug, n)
+	}
+	a.used[taken] = true
+	return []byte(taken)
+}
+
+// Put records an id the document wrote out itself, so a later heading cannot take it.
+func (a *anchors) Put(id []byte) { a.used[string(id)] = true }
+
+func slugify(title string) string {
+	var slug strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), r == '-', r == '_':
+			slug.WriteRune(r)
+		case unicode.IsSpace(r):
+			slug.WriteByte('-')
+		}
+	}
+	return slug.String()
 }
 
 // renderFrontmatter folds the block behind a fixed { }, never behind a line of the yaml

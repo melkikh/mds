@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"html/template"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -111,6 +112,49 @@ func TestFrontmatterSummary(t *testing.T) {
 		if !strings.Contains(html, "<pre>"+template.HTMLEscapeString(block[:len(block)-1])+"</pre>") {
 			t.Errorf("render(%q) lost the block itself:\n%s", block, html)
 		}
+	}
+}
+
+func TestHeadingAnchors(t *testing.T) {
+	html := renderHTML("# Заголовок Первый\n\n## Some Heading\n\n## Пункт 2.1\n\n## Дубль\n\n## Дубль\n\n## ?!\n")
+	for _, want := range []string{
+		`<h1 id="заголовок-первый">`,
+		`<h2 id="some-heading">`,
+		`<h2 id="пункт-21">`,
+		`<h2 id="дубль">`,
+		`<h2 id="дубль-1">`,
+		`<h2 id="heading">`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("no %s in\n%s\nso nothing in the document can link to that heading", want, html)
+		}
+	}
+}
+
+// A link written against a heading has to find it. Goldmark escapes the fragment it puts in
+// the href and leaves the id alone, so the two only meet once the browser unescapes.
+func TestHeadingLinksLand(t *testing.T) {
+	html := renderHTML("- [Как всё устроено](#как-всё-устроено)\n- [Setup](#setup)\n\n" +
+		"## Как всё устроено\n\n## Setup\n")
+	links := 0
+	for rest := html; ; {
+		_, after, ok := strings.Cut(rest, `<a href="#`)
+		if !ok {
+			break
+		}
+		fragment, tail, _ := strings.Cut(after, `"`)
+		rest = tail
+		links++
+		heading, err := url.PathUnescape(fragment)
+		if err != nil {
+			t.Fatalf("href #%s is not a usable fragment: %v", fragment, err)
+		}
+		if !strings.Contains(html, `id="`+heading+`"`) {
+			t.Errorf("#%s has no heading with that id, so clicking it goes nowhere:\n%s", heading, html)
+		}
+	}
+	if links != 2 {
+		t.Fatalf("found %d anchor links in the rendered contents, want 2", links)
 	}
 }
 
