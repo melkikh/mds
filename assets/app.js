@@ -20,7 +20,10 @@ document.getElementById('theme-toggle').onclick = () => {
   if (!offline() && document.querySelector('.mermaid')) location.reload()
 }
 
-const escape = text => text.replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]))
+// not named escape: a top-level const here is a global lexical binding, and it would shadow
+// window.escape for every other script on the page. Mermaid decodes a diagram by calling it,
+// so naming it that turns every "-->" in a chart into "--&gt;" and the chart into a bomb.
+const escapeHtml = text => text.replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]))
 
 const flash = (button, state) => {
   button.dataset[state] = ''
@@ -33,16 +36,16 @@ let mounts = 1
 const branch = nodes => nodes.map(node => {
   if (node.type === 'file') {
     return `<a href="${encodeURI('/' + node.path)}"${'/' + node.path === here ? ' class="here"' : ''}>` +
-      `${escape(node.name)}</a>`
+      `${escapeHtml(node.name)}</a>`
   }
   const isRoot = node.type === 'root'
   const drop = isRoot && mounts > 1
-    ? `<button class="drop" title="Stop serving this" data-root="${escape(node.path)}">&#10005;</button>` : ''
+    ? `<button class="drop" title="Stop serving this" data-root="${escapeHtml(node.path)}">&#10005;</button>` : ''
   const hidden = mdsHidden().includes(node.path)
-  const hide = `<button class="hide" data-dir="${escape(node.path)}"` +
+  const hide = `<button class="hide" data-dir="${escapeHtml(node.path)}"` +
     ` title="${hidden ? 'Show this by default' : 'Hide this until clicked'}">${hidden ? '&#9673;' : '&#9678;'}</button>`
   return `<details open${isRoot ? ' class="root"' : ''}><summary${hidden ? ' data-hidden' : ''}>` +
-    `${escape(node.name)}${drop}${hide}</summary>${branch(node.children || [])}</details>`
+    `${escapeHtml(node.name)}${drop}${hide}</summary>${branch(node.children || [])}</details>`
 }).join('')
 
 const edit = document.getElementById('edit')

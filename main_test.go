@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -258,6 +259,32 @@ func TestMermaidLoadsOnlyWhereItIsUsed(t *testing.T) {
 	}
 	if before, _, _ := strings.Cut(body, "app.js"); !strings.Contains(before, "mermaid.min.js") {
 		t.Error("mermaid must come before app.js, which calls mermaid.initialize")
+	}
+}
+
+// A top-level const in a classic script is a global lexical binding: it shadows the window
+// property of the same name for every other script on the page. Mermaid's entity decoding
+// calls escape(), so an mds-owned escape() left every arrow in every diagram as "--&gt;" and
+// drew a bomb where the chart should be.
+func TestPageScriptsDoNotShadowGlobals(t *testing.T) {
+	shadowed := []string{
+		"escape", "unescape", "atob", "btoa", "fetch", "isNaN", "parseInt", "parseFloat",
+		"encodeURI", "decodeURI", "encodeURIComponent", "decodeURIComponent",
+		"name", "length", "status", "origin", "top", "self", "parent", "location", "history",
+		"open", "close", "focus", "blur", "print", "stop", "event", "structuredClone",
+	}
+	declaration := regexp.MustCompile(`(?m)^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)`)
+	for _, asset := range []string{"assets/app.js", "assets/page.html"} {
+		source, err := assetFS.ReadFile(asset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, found := range declaration.FindAllStringSubmatch(string(source), -1) {
+			if slices.Contains(shadowed, found[1]) {
+				t.Errorf("%s declares %q at the top level, so window.%s is gone for mermaid "+
+					"and anything else the page loads", asset, found[1], found[1])
+			}
+		}
 	}
 }
 
