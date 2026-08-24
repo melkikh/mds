@@ -117,7 +117,28 @@ content.querySelectorAll('pre:not(.mermaid)').forEach(pre => {
   block.append(pre, button)
 })
 
+// An id is made of the whole title, so a contents table written against the key a heading
+// starts with — [R-0101](#r-0101) against "R-0101 — the rest of the sentence" — matches
+// nothing and the browser stays where it is. Take the first heading the key names.
+const reveal = fragment => {
+  let wanted = fragment
+  try {
+    wanted = decodeURIComponent(fragment)
+  } catch {
+    // a fragment that is not valid escaping is still worth trying as it stands
+  }
+  if (!wanted || document.getElementById(wanted)) return
+  const named = [...content.querySelectorAll('[id]')].find(node => node.id.startsWith(wanted + '-'))
+  if (named) named.scrollIntoView()
+}
+
+addEventListener('hashchange', () => reveal(location.hash.slice(1)))
+reveal(location.hash.slice(1))
+
 content.onclick = event => {
+  // the same link twice in a row is not a hashchange, so clicks are handled on their own
+  const anchor = event.target.closest('a[href^="#"]')
+  if (anchor) return reveal(anchor.getAttribute('href').slice(1))
   const code = event.target.closest('code')
   if (!code || code.closest('pre, a') || !getSelection().isCollapsed) return
   navigator.clipboard.writeText(code.textContent).then(() => {
