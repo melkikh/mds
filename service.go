@@ -104,10 +104,16 @@ func runService(opts options) error {
 		return nil
 	case "remove":
 		if installed, _ := serviceState(u); !installed {
+			if err := dropServiceSessions(); err != nil {
+				return err
+			}
 			fmt.Println("mds: nothing to remove, mds does not start at login")
 			return nil
 		}
 		if err := serviceRemove(); err != nil {
+			return err
+		}
+		if err := dropServiceSessions(); err != nil {
 			return err
 		}
 		fmt.Println("mds no longer starts at login")

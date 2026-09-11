@@ -97,13 +97,17 @@ type server struct {
 	depth    int
 	skip     []string
 	token    string
-	session  string
 	action   string
 	launch   func(string) error
 	shutdown func()
 	tmpl     *template.Template
 	watcher  *fsnotify.Watcher
 	rootsMu  sync.RWMutex
+
+	sessionMu   sync.RWMutex
+	session     string
+	sessions    []sessionHash
+	sessionFile string
 
 	cacheMu   sync.Mutex
 	cache     map[string]cached
@@ -124,13 +128,19 @@ func newServer(first *root, opts options) *server {
 		depth:    opts.depth,
 		skip:     opts.skip,
 		token:    rand.Text(),
-		session:  rand.Text(),
 		action:   rand.Text(),
 		launch:   openInEditor,
 		tmpl:     template.Must(template.ParseFS(assetFS, "assets/page.html", "assets/gate.html")),
 		cache:    map[string]cached{},
 		trees:    map[string]*tree{},
 		subs:     map[chan string]struct{}{},
+	}
+	if opts.service == serviceRun {
+		s.sessionFile = serviceSessionsFile()
+		s.sessions = readSessionHashes(s.sessionFile)
+	} else {
+		s.session = rand.Text()
+		s.sessions = []sessionHash{hashSession(s.session)}
 	}
 	if first != nil {
 		first.prefix = s.prefix(first.dir)
@@ -282,7 +292,7 @@ func (s *server) authorized(r *http.Request) bool {
 
 func (s *server) hasSession(r *http.Request) bool {
 	cookie, err := r.Cookie(sessionCookie)
-	return err == nil && sameToken(cookie.Value, s.session)
+	return err == nil && s.acceptsSession(cookie.Value)
 }
 
 func (s *server) hasMaster(r *http.Request) bool {
@@ -301,7 +311,7 @@ func (s *server) serveAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    s.session,
+		Value:    s.issueSession(),
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,

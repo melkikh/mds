@@ -28,12 +28,20 @@ func (in instance) origin() string {
 	return "http://127.0.0.1:" + in.port
 }
 
-func instancesDir() string {
+func stateDir() string {
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(cache, "mds", "instances")
+	return filepath.Join(cache, "mds")
+}
+
+func instancesDir() string {
+	dir := stateDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "instances")
 }
 
 func readInstances() []instance {

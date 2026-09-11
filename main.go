@@ -26,44 +26,26 @@ var skillFile []byte
 
 const usage = `mds — render markdown in the browser
 
-usage:
-  mds [path] [flags]
+usage: mds [path] [flags]
 
-  path               file or directory to serve (default ".")
-  -d, --depth N      max directory depth, 0 = root only, -1 = unlimited (default 5)
-  -s, --skip NAMES   comma-separated directory names to skip (default "node_modules,vendor,dist,build,target")
-  -f, --foreground   keep the server in this terminal instead of detaching
-      --new          start a separate server instead of reusing the running one
-      --no-open      do not open a browser, just print the URL
-      --service ACT  the server that starts at login: install, remove, status,
-                     restart it, or run one here and now
-      --stop         stop every running server
-      --skill        print a skill file teaching a coding agent to use mds;
-                     redirect it into wherever your agent keeps its instructions
-  -h, --help         show this help
+  path               file or directory (default ".")
+  -d, --depth N      scan depth: 0 root, -1 unlimited (default 5)
+  -s, --skip NAMES   comma-separated dirs to skip
+                     (default node_modules,vendor,dist,build,target)
+  -f, --foreground   stay in this terminal
+      --new          use a separate server
+      --no-open      print the url without opening it
+      --service ACT  install, remove, status, restart, or run
+      --stop         stop all mds servers
+      --skill        print agent instructions
+  -h, --help         show help
 
-  MDS_EDITOR         command the pencil button runs, e.g. "code -g" (default: system opener)
-                     quote a path that has spaces: "\"C:\\Program Files\\ed.exe\" -g"
-  MDS_PORT           port to serve on (default ` + defaultPort + `)
-  MDS_REMOTE_IMAGES  1 allows images from other hosts, 0 blocks them (default 0), so a file
-                     someone else wrote cannot phone home the moment you open it
+  MDS_PORT           port (default ` + defaultPort + `)
+  MDS_EDITOR         pencil command, e.g. "code -g"
+  MDS_REMOTE_IMAGES  allow off-host images when true (default false)
 
-mds serves in a detached process, prints the URL and exits, so it never blocks the shell.
-A second mds adds its path to the server that is already running and prints the URL of
-that page; the sidebar of the open tab picks it up. Each root is served under its own
-directory name, e.g. /notes/todo.md.
-
-YFM notes, cuts, tabs and multiline tables are detected from the source. The md/yfm button
-switches the current page when detection is wrong or a particular rendering is wanted.
-
-mds --service install puts mds in the login items of your session. From the next login a
-server is already there, serving nothing and holding the port, so mds <path> only ever has
-a path to hand it. --service status says whether that is on and prints the url of whatever
-is listening; --service remove takes it out again.
-
-The url carries a one-off key after the #, which the page trades for a cookie. Open the
-whole url, key and all: without it every page is a locked screen. The key changes with
-every server, and nothing but the browser it was opened in can read your files.
+mds detaches, opens the page, and reuses a running server on later runs.
+use --service install to start one at login. open the printed url whole: it has the key.
 `
 
 const (

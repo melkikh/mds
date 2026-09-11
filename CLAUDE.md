@@ -60,13 +60,18 @@ finding, not a fixture to update.
 
 ## Docs
 
-Three places say the same things and drift apart on their own: the usage string in `main.go`,
-`README.md`, and `assets/skill.md` (what an agent is told). Update all three or none.
+The usage string in `main.go`, `README.md`, and `assets/skill.md` describe the same behaviour
+to different audiences. When shared behaviour changes, update all three; do not copy detail
+that only one audience needs into the other two.
+
+`mds --help` is a command reference, not a manual. It has a hard limit of 24 lines and 88
+columns, enforced by `TestUsageFitsOneScreen`: synopsis, flags, env vars, and at most two
+short lines about the runtime model. No feature tour or security explanation.
 
 `README.md` is for a person deciding whether to use this, not a changelog and not a feature
 list. One screen, hard limit. It says what mds is, how to install it, how to run it, the
-flags and env vars, and how to hand it to an agent — nothing else. The key, the CSP, the
-sidebar, the private directories, frontmatter folding: all deliberately absent, they belong
-in `--help` and in the page itself. A new feature is usually a few words inside an existing
-sentence; a feature that seems to need its own section does not get one. When it grows, cut
-it back.
+flags and env vars, and how to hand it to an agent — nothing else. The key gets one short
+line because it is needed to open the page; the CSP, sidebar, private directories and
+frontmatter folding stay in the page itself or out of user-facing docs. A new feature is
+usually a few words inside an existing sentence; a feature that seems to need its own
+section does not get one. When it grows, cut it back.

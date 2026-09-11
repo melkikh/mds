@@ -132,6 +132,18 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+func TestUsageFitsOneScreen(t *testing.T) {
+	lines := strings.Split(strings.TrimSuffix(usage, "\n"), "\n")
+	if len(lines) > 24 {
+		t.Errorf("mds --help is %d lines, so it no longer fits in a small terminal", len(lines))
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > 88 {
+			t.Errorf("mds --help has a %d-column line, so it wraps in a narrow terminal: %q", len([]rune(line)), line)
+		}
+	}
+}
+
 func TestSharedPort(t *testing.T) {
 	t.Setenv(portEnv, "")
 	if got := sharedPort(); got != defaultPort {
