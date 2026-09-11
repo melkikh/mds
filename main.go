@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,26 +27,17 @@ var skillFile []byte
 
 const usage = `mds — render markdown in the browser
 
-usage: mds [path] [flags]
+usage: mds [path]
 
-  path               file or directory (default ".")
-  -d, --depth N      scan depth: 0 root, -1 unlimited (default 5)
-  -s, --skip NAMES   comma-separated dirs to skip
-                     (default node_modules,vendor,dist,build,target)
-  -f, --foreground   stay in this terminal
-      --new          use a separate server
-      --no-open      print the url without opening it
-      --service ACT  install, remove, status, restart, or run
-      --stop         stop all mds servers
-      --skill        print agent instructions
-  -h, --help         show help
+  path        markdown file, image, or directory (default ".")
+  --install   start mds at login
+  --remove    stop mds and remove it from login
+  --stop      stop mds until it is run again
+  --skill     print agent instructions
+  -h, --help  show help
 
-  MDS_PORT           port (default ` + defaultPort + `)
-  MDS_EDITOR         pencil command, e.g. "code -g"
-  MDS_REMOTE_IMAGES  allow off-host images when true (default false)
-
-mds detaches, opens the page, and reuses a running server on later runs.
-use --service install to start one at login. open the printed url whole: it has the key.
+mds opens one browser tab and reuses it for every path.
+settings: MDS_EDITOR, MDS_REMOTE_IMAGES
 `
 
 const (
@@ -69,7 +61,6 @@ type options struct {
 	depth      int
 	skip       []string
 	foreground bool
-	fresh      bool
 	noOpen     bool
 	service    string
 }
@@ -101,11 +92,12 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	if !opts.fresh {
-		if page, tabs, ok := addToRunning(abs); ok {
-			announce(page, detectAgent(), tabs, opts)
-			return
-		}
+	if !validTarget(abs, info.IsDir()) {
+		fatal(fmt.Errorf("cannot serve %q: use a markdown file, image, or directory", opts.target))
+	}
+	if page, tabs, ok := addToRunning(abs); ok {
+		announce(page, detectAgent(), tabs, opts)
+		return
 	}
 	if os.Getenv(childEnv) == "" && !opts.foreground {
 		detach(detectAgent())
@@ -127,7 +119,7 @@ func serve(first *root, opts options) {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "mds: port %s is taken by something else, serving on %s\n", sharedPort(), port)
-		case !opts.fresh:
+		default:
 			if page, tabs, ok := joinHolder(first.target()); ok {
 				_ = listener.Close()
 				announce(page, detectAgent(), tabs, opts)
@@ -177,7 +169,11 @@ func announce(page, agent string, tabs int, opts options) {
 		_ = openExternal(page)
 	}
 	if agent != "" {
-		fmt.Print(reuseHint)
+		if tabs > 0 {
+			fmt.Print(reuseHint)
+		} else {
+			fmt.Print(openHint)
+		}
 	}
 }
 
@@ -212,20 +208,30 @@ func parseArgs(args []string) (options, error) {
 		case "--skill":
 			printSkill()
 			os.Exit(0)
+		case "--install":
+			if opts.service != "" {
+				return opts, errors.New("use only one of --install and --remove")
+			}
+			opts.service = "install"
+		case "--remove":
+			if opts.service != "" {
+				return opts, errors.New("use only one of --install and --remove")
+			}
+			opts.service = "remove"
 		case "--stop":
 			stopRunning()
 			os.Exit(0)
-		case "-b", "--background":
-			// detaching is the default now, the flag stays so old habits keep working
+		// These are private process controls used by the login item, tests and make run.
 		case "-f", "--foreground":
 			opts.foreground = true
-		case "--new":
-			opts.fresh = true
 		case "--no-open":
 			opts.noOpen = true
 		case "--service":
-			if !slices.Contains(serviceActions, value) {
-				return opts, fmt.Errorf("--service takes one of %s, not %q", spokenList(serviceActions), value)
+			if value != serviceRun {
+				return opts, fmt.Errorf("--service is internal; use --install or --remove")
+			}
+			if opts.service != "" {
+				return opts, errors.New("service controls cannot be combined")
 			}
 			opts.service = value
 			// nobody is at the keyboard when a login server starts
@@ -252,6 +258,12 @@ func parseArgs(args []string) (options, error) {
 func listen() (net.Listener, string, bool) {
 	shared := sharedPort()
 	if l, err := net.Listen("tcp", "127.0.0.1:"+shared); err == nil {
+		if shared == "0" {
+			_, shared, err = net.SplitHostPort(l.Addr().String())
+			if err != nil {
+				fatal(err)
+			}
+		}
 		return l, shared, true
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")

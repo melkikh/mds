@@ -5,17 +5,17 @@ description: Show the user a markdown file rendered in their browser — a plan,
 
 # mds
 
-`mds <file.md>` starts a local server, prints its URL and returns immediately. It does not
-block, so run it like any other command.
+`mds <file.md>` opens the file in the shared mds browser tab and returns immediately. It does
+not block, so run it like any other command.
 
-- Give the user the URL from stdout whole, `#key=...` and all: it is what unlocks the page.
-  Do not also paste the file contents into the chat.
+- Do not repeat the URL unless the browser did not open or the user asks for it. Do not paste
+  the file contents into the chat.
 - The page live-reloads on every save. After editing the file, do not restart mds.
 - YFM notes, cuts, tabs and multiline tables are detected automatically; the page has an
   md/yfm button when a particular rendering is needed.
 - `mds <dir>` serves every markdown file under a directory, with a file tree in the sidebar.
 - For another file, run mds again with its path: it joins the sidebar of the same page,
-  and the URL that mds prints points straight at it.
+  and an open mds tab moves straight to it.
 - `mds --stop` shuts the server down.
 
 If `mds` is not installed, say so instead of guessing at another renderer:

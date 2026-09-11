@@ -143,6 +143,15 @@ func addToRunning(target string) (page string, tabs int, ok bool) {
 }
 
 func stopRunning() {
+	stopped := stopInstances()
+	if stopped == 0 {
+		fmt.Println("mds: nothing to stop")
+		return
+	}
+	fmt.Printf("mds: stopped %d server(s)\n", stopped)
+}
+
+func stopInstances() int {
 	stopped := 0
 	for _, running := range readInstances() {
 		if _, err := call(running, "/_stop"); err == nil {
@@ -150,9 +159,5 @@ func stopRunning() {
 		}
 		dropInstance(running.port)
 	}
-	if stopped == 0 {
-		fmt.Println("mds: nothing to stop")
-		return
-	}
-	fmt.Printf("mds: stopped %d server(s)\n", stopped)
+	return stopped
 }

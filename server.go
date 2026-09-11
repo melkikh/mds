@@ -368,6 +368,10 @@ func isAsset(p string) bool {
 	return slices.Contains(assetExt, strings.ToLower(filepath.Ext(p)))
 }
 
+func validTarget(p string, dir bool) bool {
+	return dir || isMarkdown(p) || isAsset(p)
+}
+
 func readInside(dir, rel string) ([]byte, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -686,6 +690,10 @@ func (s *server) serveAdd(w http.ResponseWriter, r *http.Request) {
 	info, err := os.Stat(target)
 	if !filepath.IsAbs(target) || err != nil {
 		http.Error(w, "no such path", http.StatusBadRequest)
+		return
+	}
+	if !validTarget(target, info.IsDir()) {
+		http.Error(w, "mds serves markdown, images, and directories", http.StatusBadRequest)
 		return
 	}
 	page := s.addRoot(target, info.IsDir())

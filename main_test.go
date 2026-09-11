@@ -113,10 +113,11 @@ func TestParseArgs(t *testing.T) {
 		})},
 		{[]string{"-s", "target,out"}, with(func(o *options) { o.skip = []string{"target", "out"} })},
 		{[]string{"-f", "plan.md"}, with(func(o *options) { o.target, o.foreground = "plan.md", true })},
-		{[]string{"--foreground", "--new", "--no-open"}, with(func(o *options) {
-			o.foreground, o.fresh, o.noOpen = true, true, true
+		{[]string{"--foreground", "--no-open"}, with(func(o *options) {
+			o.foreground, o.noOpen = true, true
 		})},
-		{[]string{"-b", "plan.md"}, with(func(o *options) { o.target = "plan.md" })},
+		{[]string{"--install"}, with(func(o *options) { o.service = "install" })},
+		{[]string{"--remove"}, with(func(o *options) { o.service = "remove" })},
 		{[]string{"-d"}, defaults},
 		{[]string{"-d", "oops"}, defaults},
 	}
@@ -142,6 +143,28 @@ func TestUsageFitsOneScreen(t *testing.T) {
 			t.Errorf("mds --help has a %d-column line, so it wraps in a narrow terminal: %q", len([]rune(line)), line)
 		}
 	}
+	for _, hidden := range []string{"--foreground", "--no-open", "--service", "--new", "MDS_PORT", "--depth", "--skip"} {
+		if strings.Contains(usage, hidden) {
+			t.Errorf("mds --help contains %q, so process plumbing has leaked back into the public cli", hidden)
+		}
+	}
+}
+
+func TestReadmeUsesThePublicCLI(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--install", "--remove", "--stop", "--skill"} {
+		if !strings.Contains(usage, flag) || !strings.Contains(string(readme), flag) {
+			t.Errorf("%s is missing from help or readme, so the two public interfaces have drifted", flag)
+		}
+	}
+	for _, retired := range []string{"--new", "--background", "--service ACT"} {
+		if strings.Contains(usage, retired) || strings.Contains(string(readme), retired) {
+			t.Errorf("%s is still documented, so users are sent back to the multi-server cli", retired)
+		}
+	}
 }
 
 func TestSharedPort(t *testing.T) {
@@ -155,6 +178,15 @@ func TestSharedPort(t *testing.T) {
 	}
 }
 
+func TestListenResolvesAnAutomaticPort(t *testing.T) {
+	t.Setenv(portEnv, "0")
+	listener, port, claimed := listen()
+	t.Cleanup(func() { _ = listener.Close() })
+	if !claimed || port == "0" {
+		t.Errorf("listen() = port %q, claimed %v, so an isolated server would publish an unusable url", port, claimed)
+	}
+}
+
 func TestParseArgsRejectsUnknownFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--stopp"},
@@ -163,6 +195,9 @@ func TestParseArgsRejectsUnknownFlags(t *testing.T) {
 		{"docs", "--bogus"},
 		{"-"},
 		{"-t", "dark"},
+		{"--new"},
+		{"--background"},
+		{"-b"},
 	} {
 		opts, err := parseArgs(args)
 		if err == nil {
@@ -171,6 +206,11 @@ func TestParseArgsRejectsUnknownFlags(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "unknown flag") {
 			t.Errorf("parseArgs(%q) = %v, want the message to say which flag it was", args, err)
+		}
+	}
+	for _, args := range [][]string{{"--install", "--remove"}, {"--service", "status"}} {
+		if opts, err := parseArgs(args); err == nil {
+			t.Errorf("parseArgs(%q) = %+v, so conflicting or internal controls still look valid", args, opts)
 		}
 	}
 	for _, c := range []struct {
@@ -306,6 +346,36 @@ func TestSidebarCollapses(t *testing.T) {
 	aside, _, ok := strings.Cut(body, "</aside>")
 	if !ok || !strings.Contains(aside, `id="tree-toggle"`) {
 		t.Errorf("the collapse arrow is not inside the sidebar, so collapsing it takes the way back with it:\n%s", body)
+	}
+	if !strings.Contains(aside, `id="tree-search"`) {
+		t.Errorf("the sidebar has no quiet search field, so file search exists only as an undiscoverable shortcut:\n%s", body)
+	}
+}
+
+func TestOnlySupportedTargetsAreMounted(t *testing.T) {
+	for _, target := range []struct {
+		name string
+		dir  bool
+		ok   bool
+	}{
+		{"notes.md", false, true},
+		{"notes.markdown", false, true},
+		{"diagram.svg", false, true},
+		{"project", true, true},
+		{"main.go", false, false},
+	} {
+		if got := validTarget(target.name, target.dir); got != target.ok {
+			t.Errorf("validTarget(%q, dir=%v) = %v, so the cli and server disagree about which paths can open",
+				target.name, target.dir, got)
+		}
+	}
+
+	dir := t.TempDir()
+	unsupported := writeFile(t, dir, "main.go", "package main\n")
+	s := testServer(t, fixture(t), "")
+	status, _ := post(t, s, "/_add?path="+url.QueryEscape(unsupported))
+	if status != http.StatusBadRequest || len(s.roots) != 1 {
+		t.Errorf("adding an unsupported file returned %d and left %d roots, so an older cli can still create a 404 page", status, len(s.roots))
 	}
 }
 
@@ -789,7 +859,7 @@ func TestLoginServerWaitsWithNothingMounted(t *testing.T) {
 		t.Error("the waiting page offers a file tree, and there is not a file in it")
 	}
 	if status, _ := get(t, s, "/_tree"); status != http.StatusOK {
-		t.Errorf("GET /_tree = %d with nothing mounted, want 200: --service status asks every server for it", status)
+		t.Errorf("GET /_tree = %d with nothing mounted, want 200: another mds uses it to find the server", status)
 	}
 	plan := writeFile(t, t.TempDir(), "plan.md", "# Plan\n")
 	if status, _ := post(t, s, "/_add?path="+url.QueryEscape(plan)); status != http.StatusOK {

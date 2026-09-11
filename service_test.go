@@ -91,30 +91,27 @@ func TestServiceUnitQuotesWhatItPrints(t *testing.T) {
 }
 
 func TestParseArgsService(t *testing.T) {
-	for _, action := range serviceActions {
-		opts, err := parseArgs([]string{"--service", action})
+	for _, action := range []string{"install", "remove"} {
+		opts, err := parseArgs([]string{"--" + action})
 		if err != nil {
-			t.Errorf("parseArgs(--service %s) = %v, want it accepted", action, err)
+			t.Errorf("parseArgs(--%s) = %v, want it accepted", action, err)
 			continue
 		}
 		if opts.service != action {
-			t.Errorf("parseArgs(--service %s) service = %q, want %q", action, opts.service, action)
+			t.Errorf("parseArgs(--%s) service = %q, want %q", action, opts.service, action)
 		}
 	}
 	if opts, _ := parseArgs([]string{"--service", serviceRun}); !opts.noOpen {
 		t.Error("--service run opens a browser, but nobody is at the keyboard when a login server starts")
 	}
-	if opts, _ := parseArgs([]string{"--service", "install"}); opts.noOpen {
-		t.Error("--service install turned --no-open on, and it has no server of its own to open")
-	}
-	for _, args := range [][]string{{"--service"}, {"--service", "enable"}, {"--service", "docs"}} {
+	for _, args := range [][]string{{"--service"}, {"--service", "install"}, {"--service", "status"}} {
 		opts, err := parseArgs(args)
 		if err == nil {
-			t.Errorf("parseArgs(%q) = %+v, want an error naming the actions", args, opts)
+			t.Errorf("parseArgs(%q) = %+v, so internal service controls remain public", args, opts)
 			continue
 		}
-		if !strings.Contains(err.Error(), "install") {
-			t.Errorf("parseArgs(%q) = %v, want the message to list what --service takes", args, err)
+		if !strings.Contains(err.Error(), "internal") {
+			t.Errorf("parseArgs(%q) = %v, want the message to point away from internal controls", args, err)
 		}
 	}
 }
@@ -124,10 +121,10 @@ func TestServiceInstallRefusesAPath(t *testing.T) {
 	opts.target, opts.service = "docs", "install"
 	err := runService(opts)
 	if err == nil {
-		t.Fatal("mds --service install docs installed something, and it would have served nothing of the sort")
+		t.Fatal("mds docs --install installed something, so the path was silently ignored")
 	}
-	if !strings.Contains(err.Error(), "starts empty") {
-		t.Errorf("error = %v, want it to say the login server starts empty", err)
+	if !strings.Contains(err.Error(), "takes no path") {
+		t.Errorf("error = %v, want it to say the control does not accept a path", err)
 	}
 }
 

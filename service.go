@@ -19,8 +19,6 @@ const serviceLabel = "mds"
 // wait for.
 const serviceRun = "run"
 
-var serviceActions = []string{"install", "remove", "status", "restart", serviceRun}
-
 var errNoService = errors.New("mds does not know how to start itself at login here")
 
 // serviceSettings are what a login server cannot pick up from a shell it never had, so
@@ -84,12 +82,11 @@ func runService(opts options) error {
 	if err != nil {
 		return err
 	}
+	if opts.target != "." {
+		return fmt.Errorf("--%s takes no path", opts.service)
+	}
 	switch opts.service {
 	case "install":
-		if opts.target != "." {
-			return errors.New("--service install takes no path: the login server starts empty, " +
-				"and mds <path> mounts into it")
-		}
 		if err := serviceInstall(u); err != nil {
 			return err
 		}
@@ -103,9 +100,14 @@ func runService(opts options) error {
 		}
 		return nil
 	case "remove":
-		if installed, _ := serviceState(u); !installed {
+		if !serviceInstalled() {
+			stopped := stopInstances()
 			if err := dropServiceSessions(); err != nil {
 				return err
+			}
+			if stopped > 0 {
+				fmt.Println("mds stopped; it did not start at login")
+				return nil
 			}
 			fmt.Println("mds: nothing to remove, mds does not start at login")
 			return nil
@@ -113,71 +115,14 @@ func runService(opts options) error {
 		if err := serviceRemove(); err != nil {
 			return err
 		}
+		stopInstances()
 		if err := dropServiceSessions(); err != nil {
 			return err
 		}
 		fmt.Println("mds no longer starts at login")
 		return nil
-	case "restart":
-		if installed, _ := serviceState(u); !installed {
-			return errors.New("mds does not start at login yet, see mds --service install")
-		}
-		if err := serviceRestart(u); err != nil {
-			return err
-		}
-		fmt.Println("mds: restarted")
-		return nil
-	case "status":
-		printState(u)
-		return nil
 	}
-	return fmt.Errorf("unknown --service action %q, one of %s", opts.service, spokenList(serviceActions))
-}
-
-func printState(u unit) {
-	say := func(name, value string) { fmt.Printf("%-10s %s\n", name, value) }
-	where, err := serviceLocation()
-	if err != nil {
-		say("autostart", "not on this system")
-		say("by hand", u.command())
-	} else {
-		installed, ours := serviceState(u)
-		switch {
-		case !installed:
-			say("autostart", "off")
-		case !ours:
-			say("autostart", "on, but pointing at another mds — mds --service install moves it here")
-		default:
-			say("autostart", "on")
-		}
-		say("item", where)
-		say("runs", u.command())
-	}
-	live := liveInstances()
-	if len(live) == 0 {
-		say("serving", "nothing")
-		return
-	}
-	for i, running := range live {
-		name := "serving"
-		if i > 0 {
-			name = ""
-		}
-		say(name, running.origin()+"/#"+tokenParam+"="+running.token)
-	}
-}
-
-// liveInstances is the instances file with the entries nothing answers on taken out.
-func liveInstances() []instance {
-	live := []instance{}
-	for _, running := range readInstances() {
-		if !alive(running) {
-			dropInstance(running.port)
-			continue
-		}
-		live = append(live, running)
-	}
-	return live
+	return fmt.Errorf("unknown service action %q", opts.service)
 }
 
 // holdsPort tells whether an mds already answers on the shared port. A login server has no

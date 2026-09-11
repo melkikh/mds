@@ -95,6 +95,6 @@ func TestDroppingServiceSessionsRevokesTheSavedBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if code := readWithCookie(t, newServer(nil, opts), cookie); code != http.StatusUnauthorized {
-		t.Errorf("GET / after removing saved sessions = %d, want 401 so --service remove revokes the browser", code)
+		t.Errorf("GET / after removing saved sessions = %d, want 401 so --remove revokes the browser", code)
 	}
 }

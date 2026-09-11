@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"os/exec"
-	"strings"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -20,17 +19,14 @@ func serviceLocation() (string, error) {
 	return `HKCU\` + runKey + `\` + serviceLabel, nil
 }
 
-func serviceState(u unit) (installed, ours bool) {
+func serviceInstalled() bool {
 	key, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
 	if err != nil {
-		return false, false
+		return false
 	}
 	defer func() { _ = key.Close() }()
-	value, _, err := key.GetStringValue(serviceLabel)
-	if err != nil {
-		return false, false
-	}
-	return true, strings.Contains(value, u.exe)
+	_, _, err = key.GetStringValue(serviceLabel)
+	return err == nil
 }
 
 func serviceInstall(u unit) error {

@@ -11,8 +11,12 @@ import (
 
 const childEnv = "MDS_CHILD"
 
-const reuseHint = `mds was already running, so that path was added to the page above and to its sidebar.
-Show the URL to the user; the page live-reloads on every save. Stop the server: mds --stop
+const reuseHint = `mds moved an open tab to that path and added it to the sidebar.
+do not repeat the url unless the user says the tab did not move. the page live-reloads on save.
+`
+
+const openHint = `mds asked the browser to open that path.
+only show the url if the browser did not open. the page live-reloads on save.
 `
 
 var agentEnv = []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "OPENCODE_BIN_PATH", "CURSOR_TRACE_ID", "AIDER_MODEL"}
@@ -26,22 +30,12 @@ func detectAgent() string {
 	return ""
 }
 
-func childArgs(args []string) []string {
-	kept := []string{}
-	for _, arg := range args {
-		if arg != "-b" && arg != "--background" {
-			kept = append(kept, arg)
-		}
-	}
-	return kept
-}
-
 func detach(agent string) {
 	binary, err := os.Executable()
 	if err != nil {
 		fatal(err)
 	}
-	child := exec.Command(binary, childArgs(os.Args[1:])...)
+	child := exec.Command(binary, os.Args[1:]...)
 	child.Env = append(os.Environ(), childEnv+"=1")
 	child.SysProcAttr = detachAttr()
 	stdout, err := child.StdoutPipe()
@@ -66,10 +60,10 @@ func detach(agent string) {
 		return
 	}
 	fmt.Printf(`mds serves that path in the background (pid %d) and does not block.
-The page live-reloads on every save, so there is no need to restart it.
-Show the URL above to the user instead of pasting the file into the chat.
-Another file: run mds again with its path, it lands in the sidebar of the same page.
-Stop it: mds --stop
+the page live-reloads on every save, so there is no need to restart it.
+mds asked the browser to open it. only show the url if the browser did not open.
+another file: run mds again with its path, it lands in the sidebar of the same page.
+stop it: mds --stop
 `, child.Process.Pid)
 }
 

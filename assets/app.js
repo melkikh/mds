@@ -32,21 +32,53 @@ const flash = (button, state) => {
 
 const here = decodeURI(location.pathname)
 let mounts = 1
+let searchTerm = ''
+let treeNodes = []
 
-const branch = nodes => nodes.map(node => {
+const treeClosedState = () => {
+  try {
+    const state = JSON.parse(localStorage.mdsTreeClosed || '[]')
+    return Array.isArray(state) ? state.filter(key => typeof key === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+const rememberTree = (key, open) => {
+  const closed = treeClosedState().filter(saved => saved !== key)
+  if (!open) closed.push(key)
+  if (closed.length) localStorage.mdsTreeClosed = JSON.stringify(closed.slice(-256))
+  else delete localStorage.mdsTreeClosed
+}
+
+const branch = (nodes, trail = [], closed = treeClosedState()) => nodes.map(node => {
+  const names = [...trail, node.name]
   if (node.type === 'file') {
     return `<a href="${encodeURI('/' + node.path)}"${'/' + node.path === here ? ' class="here"' : ''}>` +
       `${escapeHtml(node.name)}</a>`
   }
   const isRoot = node.type === 'root'
+  const key = JSON.stringify(names)
+  const active = here === '/' + node.path || here.startsWith('/' + node.path + '/')
+  const open = searchTerm || active || !closed.includes(key)
   const drop = isRoot && mounts > 1
     ? `<button class="drop" title="Stop serving this" data-root="${escapeHtml(node.path)}">&#10005;</button>` : ''
   const hidden = mdsHidden().includes(node.path)
   const hide = `<button class="hide" data-dir="${escapeHtml(node.path)}"` +
     ` title="${hidden ? 'Show this by default' : 'Hide this until clicked'}">${hidden ? '&#9673;' : '&#9678;'}</button>`
-  return `<details open${isRoot ? ' class="root"' : ''}><summary${hidden ? ' data-hidden' : ''}>` +
-    `${escapeHtml(node.name)}${drop}${hide}</summary>${branch(node.children || [])}</details>`
+  return `<details data-tree-key="${escapeHtml(key)}"${open ? ' open' : ''}${isRoot ? ' class="root"' : ''}>` +
+    `<summary${hidden ? ' data-hidden' : ''}>${escapeHtml(node.name)}${drop}${hide}</summary>` +
+    `${branch(node.children || [], names, closed)}</details>`
 }).join('')
+
+const matchingTree = (nodes, trail = []) => nodes.flatMap(node => {
+  const names = [...trail, node.name]
+  if (node.type === 'file') {
+    return names.join('/').toLocaleLowerCase().includes(searchTerm) ? [node] : []
+  }
+  const children = matchingTree(node.children || [], names)
+  return children.length ? [{ ...node, children }] : []
+})
 
 const edit = document.getElementById('edit')
 if (edit) {
@@ -232,11 +264,17 @@ content.onclick = event => {
 const tree = document.getElementById('tree')
 if (tree) {
   const files = document.getElementById('files')
+  const search = document.getElementById('tree-search')
+  const drawTree = () => {
+    const nodes = searchTerm ? matchingTree(treeNodes) : treeNodes
+    files.innerHTML = branch(nodes) || `<p class="tree-empty">${searchTerm ? 'no matches' : 'no files'}</p>`
+  }
   const showTree = async () => {
     try {
       const data = await (await fetch('/_tree')).json()
-      mounts = (data.nodes || []).length
-      files.innerHTML = branch(data.nodes || [])
+      treeNodes = data.nodes || []
+      mounts = treeNodes.length
+      drawTree()
     } catch {
       // the server went away; the tree already on the page beats an empty one
     }
@@ -246,6 +284,28 @@ if (tree) {
     root.dataset.tree = ''
     showTree()
   }
+  search.oninput = () => {
+    searchTerm = search.value.trim().toLocaleLowerCase()
+    drawTree()
+  }
+  search.onkeydown = event => {
+    if (event.key === 'Escape') {
+      if (search.value) {
+        search.value = ''
+        search.oninput()
+      } else {
+        search.blur()
+      }
+    }
+    if (event.key === 'Enter') files.querySelector('a')?.click()
+  }
+  addEventListener('keydown', event => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 'k') return
+    event.preventDefault()
+    if (!('tree' in root.dataset)) expand()
+    search.focus()
+    search.select()
+  })
   tree.onclick = event => {
     // collapsed, the whole rail is the way back in
     if (!('tree' in root.dataset)) return expand()
@@ -261,13 +321,19 @@ if (tree) {
       return
     }
     const hide = event.target.closest('.hide')
-    if (!hide) return
-    event.preventDefault()
-    const dir = hide.dataset.dir
-    const marked = mdsHidden().filter(known => known !== dir)
-    if (marked.length === mdsHidden().length) marked.push(dir)
-    localStorage.mdsHidden = JSON.stringify(marked)
-    showTree()
+    if (hide) {
+      event.preventDefault()
+      const dir = hide.dataset.dir
+      const marked = mdsHidden().filter(known => known !== dir)
+      if (marked.length === mdsHidden().length) marked.push(dir)
+      localStorage.mdsHidden = JSON.stringify(marked)
+      showTree()
+      return
+    }
+    const summary = event.target.closest('summary')
+    if (!summary || searchTerm) return
+    const details = summary.parentElement
+    setTimeout(() => rememberTree(details.dataset.treeKey, details.open))
   }
   if ('tree' in root.dataset) showTree()
 }

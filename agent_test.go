@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,22 +28,6 @@ func TestDetectAgent(t *testing.T) {
 	}
 }
 
-func TestChildArgs(t *testing.T) {
-	for _, c := range []struct {
-		args []string
-		want []string
-	}{
-		{[]string{"-b", "plan.md"}, []string{"plan.md"}},
-		{[]string{"docs", "--background", "-d", "2", "--no-open"}, []string{"docs", "-d", "2", "--no-open"}},
-		{[]string{"plan.md"}, []string{"plan.md"}},
-		{nil, []string{}},
-	} {
-		if got := childArgs(c.args); !slices.Equal(got, c.want) {
-			t.Errorf("childArgs(%q) = %q, want %q", c.args, got, c.want)
-		}
-	}
-}
-
 func TestSkillAsset(t *testing.T) {
 	skill, err := assetFS.ReadFile("assets/skill.md")
 	if err != nil {
@@ -57,6 +40,17 @@ func TestSkillAsset(t *testing.T) {
 	}
 }
 
+func TestAgentHintsDoNotCreateASecondTab(t *testing.T) {
+	open := captureStdout(t, func() { announce("http://example.test/new", "CODEX", 0, options{noOpen: true}) })
+	if !strings.Contains(open, "browser to open") || !strings.Contains(open, "only show the url") {
+		t.Errorf("hint with no tab = %q, so an agent cannot tell whether it should share the url", open)
+	}
+	reused := captureStdout(t, func() { announce("http://example.test/reused", "CODEX", 1, options{noOpen: true}) })
+	if !strings.Contains(reused, "moved an open tab") || !strings.Contains(reused, "do not repeat the url") {
+		t.Errorf("hint with an open tab = %q, so an agent may make the user open a duplicate", reused)
+	}
+}
+
 func TestDetachedServer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a binary")
@@ -65,9 +59,10 @@ func TestDetachedServer(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	launcher := exec.Command(binary, "--new", "--no-open", fixture(t))
+	launcher := exec.Command(binary, "--no-open", fixture(t))
 	cache := t.TempDir()
-	launcher.Env = append(os.Environ(), "CLAUDECODE=1", "HOME="+cache, "XDG_CACHE_HOME="+cache, "LOCALAPPDATA="+cache)
+	launcher.Env = append(os.Environ(), "CLAUDECODE=1", "MDS_PORT=0", "HOME="+cache,
+		"XDG_CACHE_HOME="+cache, "LOCALAPPDATA="+cache)
 	stdout, err := launcher.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)

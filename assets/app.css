@@ -291,8 +291,31 @@ body:has(#tree) #veil { left: var(--aside); }
 
 html:not([data-tree]) #tree { cursor: e-resize; }
 
-#files { flex: 1; padding: 16px 12px 8px; overflow: auto; }
-html:not([data-tree]) #files { display: none; }
+#tree-search {
+  flex: none;
+  width: calc(100% - 24px);
+  margin: 12px 12px 0;
+  padding: 4px 8px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  opacity: .45;
+}
+
+#tree-search:hover, #tree-search:focus, #tree-search:not(:placeholder-shown) {
+  background: var(--bg);
+  border-color: var(--border);
+  opacity: 1;
+}
+
+#tree-search::placeholder { color: var(--muted); }
+#files { flex: 1; padding: 8px 12px; overflow: auto; }
+html:not([data-tree]) #files, html:not([data-tree]) #tree-search { display: none; }
+.tree-empty { margin: 10px 0; color: var(--muted); }
 
 #tree-toggle {
   flex: none;

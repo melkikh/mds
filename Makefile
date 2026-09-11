@@ -1,7 +1,6 @@
 ARGS    ?= .
 MODULE  := $(shell go list -m)
-LATEST  := $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
-VERSION ?= $(shell echo $(LATEST) | awk -F. -v OFS=. '{$$NF++; print}')
+VERSION ?= v0.3.0
 
 .PHONY: all build run test check guard publish install clean
 .NOTPARALLEL:
@@ -12,10 +11,10 @@ all: build publish
 build:
 	go build -o mds .
 
-# make run ARGS="-f docs" to keep it in this terminal, or point it somewhere else
+# make run ARGS="docs" to test another path
 run: build
 	@./mds --stop
-	./mds $(ARGS)
+	./mds --foreground $(ARGS)
 
 test:
 	@test -z "$$(gofmt -l .)" || { echo "gofmt wants:"; gofmt -l .; exit 1; }

@@ -7,7 +7,7 @@ beyond goldmark/chroma/fsnotify. It renders files off the user's disk in their b
 
 - `make test` (gofmt check, vet, `go test -race`) before calling anything done. `make check`
   additionally cross-builds for darwin/linux/windows/freebsd.
-- `make run ARGS="--no-open ."` rebuilds, stops the old server and serves this repo. Look at
+- `make run ARGS="."` rebuilds, stops the old server and serves this repo. Look at
   the thing you changed; curl it if you cannot click it.
 - Client-side changes cannot be proven by Go tests. `node --check` the assets at minimum, and
   for anything stateful (focus, storage, reveal) drive the logic through a throwaway

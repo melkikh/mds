@@ -49,16 +49,13 @@ func serviceContent(u unit) string {
 	return out.String()
 }
 
-func serviceState(u unit) (installed, ours bool) {
+func serviceInstalled() bool {
 	path, err := serviceLocation()
 	if err != nil {
-		return false, false
+		return false
 	}
-	job, err := os.ReadFile(path)
-	if err != nil {
-		return false, false
-	}
-	return true, strings.Contains(string(job), "<string>"+xmlText(u.exe)+"</string>")
+	_, err = os.Stat(path)
+	return err == nil
 }
 
 func serviceInstall(u unit) error {
@@ -92,10 +89,6 @@ func serviceRemove() error {
 		return err
 	}
 	return nil
-}
-
-func serviceRestart(unit) error {
-	return launchctl("kickstart", "-k", serviceTarget())
 }
 
 func serviceDomain() string {

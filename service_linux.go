@@ -44,16 +44,13 @@ func serviceContent(u unit) string {
 	return out.String()
 }
 
-func serviceState(u unit) (installed, ours bool) {
+func serviceInstalled() bool {
 	path, err := serviceLocation()
 	if err != nil {
-		return false, false
+		return false
 	}
-	unitFile, err := os.ReadFile(path)
-	if err != nil {
-		return false, false
-	}
-	return true, strings.Contains(string(unitFile), quoteUnit(u.exe))
+	_, err = os.Stat(path)
+	return err == nil
 }
 
 func serviceInstall(u unit) error {
@@ -86,10 +83,6 @@ func serviceRemove() error {
 		return err
 	}
 	return systemctl("daemon-reload")
-}
-
-func serviceRestart(unit) error {
-	return systemctl("restart", serviceUnitName)
 }
 
 // serviceCommand writes the binary as one word whatever its path looks like, and leaves the

@@ -26,12 +26,12 @@ func TestServiceContentIsASystemdUnit(t *testing.T) {
 	}
 }
 
-func TestServiceStateSeesWhichMdsIsInstalled(t *testing.T) {
+func TestServiceInstalledSeesTheLoginItem(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
 	u := unit{exe: "/opt/mds/mds", args: []string{"--foreground", "--service", "run"}}
-	if installed, _ := serviceState(u); installed {
-		t.Fatal("serviceState found a login item in an empty config dir")
+	if serviceInstalled() {
+		t.Fatal("serviceInstalled found a login item in an empty config dir")
 	}
 	path, err := serviceLocation()
 	if err != nil {
@@ -43,12 +43,7 @@ func TestServiceStateSeesWhichMdsIsInstalled(t *testing.T) {
 	if err := os.WriteFile(path, []byte(serviceContent(u)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if installed, ours := serviceState(u); !installed || !ours {
-		t.Errorf("serviceState = %v, %v for the unit it just wrote, want true, true", installed, ours)
-	}
-	moved := unit{exe: "/usr/local/bin/mds", args: u.args}
-	if installed, ours := serviceState(moved); !installed || ours {
-		t.Errorf("serviceState = %v, %v for another binary, want true, false, "+
-			"so status can say the login item points elsewhere", installed, ours)
+	if !serviceInstalled() {
+		t.Error("serviceInstalled missed the unit, so --remove would leave it behind")
 	}
 }
