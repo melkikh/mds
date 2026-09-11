@@ -1,5 +1,5 @@
 <!doctype html>
-<html{{if .Stale}} data-stale{{end}}{{if .Tree}} data-tree{{end}}>
+<html{{if .Stale}} data-stale{{end}}{{if .Tree}} data-tree{{end}}{{if .Flavor}} data-flavor="{{.Flavor}}"{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -26,7 +26,8 @@ if (localStorage.mdsTree === "closed") delete document.documentElement.dataset.t
 <body>
 <button id="theme-toggle" title="Toggle theme">&#9686;</button>
 {{if .Path}}<button id="edit" title="Open in editor" data-path="{{.Path}}">&#9998;</button>
-<button id="copy-file" title="Copy the whole file as markdown" data-path="{{.Path}}">&#10697;</button>{{end}}
+<button id="copy-file" title="Copy the whole file as markdown" data-path="{{.Path}}">&#10697;</button>
+<button id="flavor-toggle" title="render as {{if eq .Flavor "yfm"}}markdown{{else}}yfm{{end}}">{{.Flavor}}</button>{{end}}
 {{if .Tree}}<aside id="tree"><nav id="files"></nav>
 <button id="tree-toggle" title="Files" aria-label="Files"></button></aside>{{end}}
 <main>{{.Content}}</main>

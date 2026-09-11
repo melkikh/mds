@@ -53,6 +53,9 @@ A second mds adds its path to the server that is already running and prints the 
 that page; the sidebar of the open tab picks it up. Each root is served under its own
 directory name, e.g. /notes/todo.md.
 
+YFM notes, cuts, tabs and multiline tables are detected from the source. The md/yfm button
+switches the current page when detection is wrong or a particular rendering is wanted.
+
 mds --service install puts mds in the login items of your session. From the next login a
 server is already there, serving nothing and holding the port, so mds <path> only ever has
 a path to hand it. --service status says whether that is on and prints the url of whatever

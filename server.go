@@ -71,6 +71,7 @@ type view struct {
 	status  int
 	title   string
 	path    string
+	flavor  flavor
 	stale   bool
 	content template.HTML
 	mermaid bool
@@ -78,6 +79,7 @@ type view struct {
 
 type cached struct {
 	source  []byte
+	flavor  flavor
 	content template.HTML
 	mermaid bool
 }
@@ -422,14 +424,27 @@ func (s *server) serveContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := view{status: http.StatusOK, title: path.Base(rel), path: rt.page(rel)}
+	selected, forced := requestFlavor(r)
 	source, err := readInside(rt.dir, rel)
 	if err == nil {
-		entry := s.renderFile(full, source)
+		if !forced && detectYFM(source) {
+			selected = yfmFlavor
+		}
+		entry := s.renderFile(full, source, selected)
+		page.flavor = selected
 		page.content, page.mermaid = entry.content, entry.mermaid
 		s.renderPage(w, page)
 		return
 	}
-	if entry, ok := s.recall(full); ok {
+	entry, ok := s.recall(full)
+	if forced {
+		entry, ok = s.recallFlavor(full, selected)
+	}
+	if ok {
+		page.flavor = entry.flavor
+		if page.flavor == "" {
+			page.flavor = markdownFlavor
+		}
 		page.stale, page.content, page.mermaid = true, entry.content, entry.mermaid
 		s.renderPage(w, page)
 		return
@@ -496,9 +511,20 @@ func (s *server) renderPage(w http.ResponseWriter, v view) {
 	w.WriteHeader(v.status)
 	_ = s.tmpl.ExecuteTemplate(w, "page.html", map[string]any{
 		"Title": v.title, "Path": v.path, "Tree": tree,
-		"Stale": v.stale, "Content": v.content, "Mermaid": v.mermaid,
+		"Stale": v.stale, "Content": v.content, "Mermaid": v.mermaid, "Flavor": v.flavor,
 		"Nonce": nonce, "Token": s.action,
 	})
+}
+
+func requestFlavor(r *http.Request) (flavor, bool) {
+	switch r.URL.Query().Get("flavor") {
+	case "yfm":
+		return yfmFlavor, true
+	case "md":
+		return markdownFlavor, true
+	default:
+		return markdownFlavor, false
+	}
 }
 
 func (entry cached) size() int {
@@ -508,12 +534,13 @@ func (entry cached) size() int {
 func (s *server) remember(file string, entry cached) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
-	if old, ok := s.cache[file]; ok {
+	key := flavorCacheKey(file, entry.flavor)
+	if old, ok := s.cache[key]; ok {
 		s.cacheSize -= old.size()
 	} else {
-		s.order = append(s.order, file)
+		s.order = append(s.order, key)
 	}
-	s.cache[file] = entry
+	s.cache[key] = entry
 	s.cacheSize += entry.size()
 	for len(s.order) > 1 && (len(s.order) > cachedFiles || s.cacheSize > cachedBytes) {
 		oldest := s.order[0]
@@ -526,16 +553,39 @@ func (s *server) remember(file string, entry cached) {
 func (s *server) recall(file string) (cached, bool) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
-	entry, ok := s.cache[file]
+	for i := len(s.order) - 1; i >= 0; i-- {
+		if cacheFile(s.order[i]) == file {
+			return s.cache[s.order[i]], true
+		}
+	}
+	return cached{}, false
+}
+
+func (s *server) recallFlavor(file string, flavor flavor) (cached, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	entry, ok := s.cache[flavorCacheKey(file, flavor)]
 	return entry, ok
 }
 
-func (s *server) renderFile(file string, source []byte) cached {
-	if entry, ok := s.recall(file); ok && bytes.Equal(entry.source, source) {
+func flavorCacheKey(file string, flavor flavor) string {
+	if flavor == yfmFlavor {
+		return file + "\x00yfm"
+	}
+	return file
+}
+
+func cacheFile(key string) string {
+	file, _, _ := strings.Cut(key, "\x00")
+	return file
+}
+
+func (s *server) renderFile(file string, source []byte, flavor flavor) cached {
+	if entry, ok := s.recallFlavor(file, flavor); ok && bytes.Equal(entry.source, source) {
 		return entry
 	}
-	content, mermaid := render(source)
-	entry := cached{source: source, content: content, mermaid: mermaid}
+	content, mermaid := renderFlavor(source, flavor)
+	entry := cached{source: source, flavor: flavor, content: content, mermaid: mermaid}
 	s.remember(file, entry)
 	return entry
 }
@@ -544,13 +594,13 @@ func (s *server) forget(rt *root) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	delete(s.trees, rt.prefix)
-	for _, file := range s.order {
-		if rt.covers(file) {
-			s.cacheSize -= s.cache[file].size()
-			delete(s.cache, file)
+	for _, key := range s.order {
+		if rt.covers(cacheFile(key)) {
+			s.cacheSize -= s.cache[key].size()
+			delete(s.cache, key)
 		}
 	}
-	s.order = slices.DeleteFunc(s.order, rt.covers)
+	s.order = slices.DeleteFunc(s.order, func(key string) bool { return rt.covers(cacheFile(key)) })
 }
 
 func (s *server) serveTree(w http.ResponseWriter, r *http.Request) {

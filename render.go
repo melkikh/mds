@@ -22,15 +22,34 @@ import (
 	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 )
 
-var markdown = goldmark.New(
-	goldmark.WithExtensions(
+type flavor string
+
+const (
+	markdownFlavor flavor = "md"
+	yfmFlavor      flavor = "yfm"
+)
+
+func newMarkdown(yfm bool) goldmark.Markdown {
+	extensions := []goldmark.Extender{
 		extension.GFM,
 		extension.Typographer,
 		highlighting.NewHighlighting(highlighting.WithFormatOptions(chromahtml.WithClasses(true))),
-	),
-	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
-	goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()),
-)
+	}
+	parserOptions := []parser.Option{parser.WithAutoHeadingID()}
+	if yfm {
+		extensions = append(extensions, yfmExtension{})
+		parserOptions = append(parserOptions, parser.WithAttribute())
+	}
+	return goldmark.New(
+		goldmark.WithExtensions(extensions...),
+		goldmark.WithParserOptions(parserOptions...),
+		goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()),
+	)
+}
+
+var markdown = newMarkdown(false)
+
+var yfmMarkdown = newMarkdown(true)
 
 var mermaidBlock = regexp.MustCompile(`(?s)<pre><code class="language-mermaid">(.*?)</code></pre>`)
 
@@ -44,6 +63,10 @@ type node struct {
 }
 
 func render(source []byte) (template.HTML, bool) {
+	return renderFlavor(source, markdownFlavor)
+}
+
+func renderFlavor(source []byte, flavor flavor) (template.HTML, bool) {
 	head := ""
 	if match := frontmatter.FindSubmatchIndex(source); match != nil {
 		head = renderFrontmatter(string(source[match[2]:match[3]]))
@@ -51,7 +74,11 @@ func render(source []byte) (template.HTML, bool) {
 	}
 	var buf bytes.Buffer
 	ids := parser.WithIDs(&anchors{used: map[string]bool{}})
-	if err := markdown.Convert(source, &buf, parser.WithContext(parser.NewContext(ids))); err != nil {
+	renderer := markdown
+	if flavor == yfmFlavor {
+		renderer = yfmMarkdown
+	}
+	if err := renderer.Convert(source, &buf, parser.WithContext(parser.NewContext(ids))); err != nil {
 		return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>"), false
 	}
 	body := buf.String()

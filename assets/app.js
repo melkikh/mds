@@ -77,6 +77,13 @@ if (copyFile) {
   }
 }
 
+const flavorToggle = document.getElementById('flavor-toggle')
+if (flavorToggle) flavorToggle.onclick = () => {
+  const url = new URL(location.href)
+  url.searchParams.set('flavor', root.dataset.flavor === 'yfm' ? 'md' : 'yfm')
+  location.href = url
+}
+
 const front = document.querySelector('details.frontmatter')
 if (front) {
   front.open = localStorage.mdsFrontmatter === '1'
@@ -106,6 +113,71 @@ arrive()
 
 const content = document.querySelector('main')
 
+const yfmTabsState = () => { try { return JSON.parse(localStorage.mdsYfmTabs || '{}') } catch { return {} } }
+const yfmSelectTab = (tabs, selected, remember) => {
+  const sections = [...tabs.querySelectorAll(':scope > .yfm-tab')]
+  const buttons = [...tabs.querySelectorAll(':scope > .yfm-tab-list > button')]
+  sections.forEach((section, index) => {
+    section.hidden = index !== selected
+    buttons[index].setAttribute('aria-selected', index === selected ? 'true' : 'false')
+    buttons[index].tabIndex = index === selected ? 0 : -1
+  })
+  const group = tabs.dataset.group
+  if (!group || !remember) return
+  const state = yfmTabsState()
+  state[group] = sections[selected].dataset.title
+  localStorage.mdsYfmTabs = JSON.stringify(state)
+  document.querySelectorAll('.yfm-tabs[data-group]').forEach(other => {
+    if (other === tabs || other.dataset.group !== group) return
+    const peers = [...other.querySelectorAll(':scope > .yfm-tab')]
+    const index = peers.findIndex(section => section.dataset.title === state[group])
+    if (index >= 0) yfmSelectTab(other, index, false)
+  })
+}
+
+document.querySelectorAll('.yfm-tabs').forEach((tabs, tabsIndex) => {
+  const sections = [...tabs.querySelectorAll(':scope > .yfm-tab')]
+  if (!sections.length) return
+  const list = document.createElement('div')
+  list.className = 'yfm-tab-list'
+  list.setAttribute('role', 'tablist')
+  sections.forEach((section, index) => {
+    const button = document.createElement('button')
+    const id = `mds-tab-${tabsIndex}-${index}`
+    button.textContent = section.dataset.title
+    button.id = id + '-button'
+    button.setAttribute('role', 'tab')
+    button.setAttribute('aria-controls', id)
+    section.id = id
+    section.setAttribute('role', 'tabpanel')
+    section.setAttribute('aria-labelledby', button.id)
+    button.onclick = () => yfmSelectTab(tabs, index, true)
+    button.onkeydown = event => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      event.preventDefault()
+      const step = event.key === 'ArrowRight' ? 1 : -1
+      const next = (index + step + sections.length) % sections.length
+      yfmSelectTab(tabs, next, true)
+      list.children[next].focus()
+    }
+    list.append(button)
+  })
+  tabs.prepend(list)
+  const saved = tabs.dataset.group && yfmTabsState()[tabs.dataset.group]
+  const selected = saved && sections.findIndex(section => section.dataset.title === saved)
+  const marked = sections.findIndex(section => 'selected' in section.dataset)
+  yfmSelectTab(tabs, selected >= 0 ? selected : marked >= 0 ? marked : 0, false)
+})
+
+document.querySelectorAll('.yfm-cut[data-group]').forEach(cut => {
+  cut.addEventListener('toggle', () => {
+    if (!cut.open) return
+    document.querySelectorAll('.yfm-cut[data-group]').forEach(other => {
+      if (other !== cut && other.dataset.group === cut.dataset.group) other.open = false
+    })
+  })
+})
+
 content.querySelectorAll('pre:not(.mermaid)').forEach(pre => {
   if (pre.closest('.frontmatter')) return
   const block = document.createElement('div')
@@ -130,9 +202,16 @@ const reveal = fragment => {
   } catch {
     // a fragment that is not valid escaping is still worth trying as it stands
   }
-  if (!wanted || document.getElementById(wanted)) return
-  const named = [...content.querySelectorAll('[id]')].find(node => node.id.startsWith(wanted + '-'))
-  if (named) named.scrollIntoView()
+  if (!wanted) return
+  const exact = document.getElementById(wanted)
+  const named = exact || [...content.querySelectorAll('[id]')].find(node => node.id.startsWith(wanted + '-'))
+  if (!named) return
+  let fold = named.matches('details') ? named : named.closest('details')
+  while (fold) {
+    fold.open = true
+    fold = fold.parentElement && fold.parentElement.closest('details')
+  }
+  if (!exact || named.matches('details')) named.scrollIntoView()
 }
 
 addEventListener('hashchange', () => reveal(location.hash.slice(1)))

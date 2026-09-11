@@ -345,6 +345,34 @@ func TestServeContentFileMode(t *testing.T) {
 	}
 }
 
+func TestServeContentChoosesAndOverridesFlavor(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "yfm.md", "{% note info %}\n\nauto\n\n{% endnote %}\n")
+	writeFile(t, dir, "plain.md", "forced^up^\n")
+	s := testServer(t, dir, "")
+
+	_, body := get(t, s, at(s, "yfm.md"))
+	if !strings.Contains(body, `data-flavor="yfm"`) || !strings.Contains(body, `class="yfm-note`) {
+		t.Errorf("an unmistakable YFM file was not rendered as YFM, so its note stays as control syntax:\n%s", body)
+	}
+	if !strings.Contains(body, `id="flavor-toggle" title="render as markdown">yfm</button>`) {
+		t.Errorf("an automatically selected dialect has no visible way back to Markdown:\n%s", body)
+	}
+
+	_, body = get(t, s, at(s, "yfm.md")+"?flavor=md")
+	if !strings.Contains(body, `data-flavor="md"`) || strings.Contains(body, `class="yfm-note`) || !strings.Contains(body, "{% note info %}") {
+		t.Errorf("the Markdown override did not restore the literal source syntax:\n%s", body)
+	}
+
+	_, body = get(t, s, at(s, "plain.md")+"?flavor=yfm")
+	if !strings.Contains(body, `data-flavor="yfm"`) || !strings.Contains(body, `forced<sup>up</sup>`) {
+		t.Errorf("the YFM override did not render a file the detector would otherwise leave alone:\n%s", body)
+	}
+	if len(s.cache) != 3 {
+		t.Errorf("the cache holds %d variants, so one flavor may overwrite the other", len(s.cache))
+	}
+}
+
 func TestServeEdit(t *testing.T) {
 	root := fixture(t)
 	s := testServer(t, root, "")

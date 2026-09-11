@@ -151,6 +151,58 @@ img { max-width: 100%; }
 input[type="checkbox"] { margin-right: .4em; }
 ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
 
+.yfm-note {
+  margin-block: 0 1em;
+  padding: 12px 16px;
+  background: var(--code-bg);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+}
+
+.yfm-note-tip { border-color: var(--str); }
+.yfm-note-warning { border-color: var(--typ); }
+.yfm-note-alert { border-color: var(--kw); }
+.yfm-note-title { margin-bottom: 4px; font-weight: 600; }
+.yfm-note-content > :last-child { margin-bottom: 0; }
+
+.yfm-cut {
+  margin-block: 0 1em;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.yfm-cut > summary { color: var(--accent); cursor: pointer; }
+.yfm-cut-content { padding-top: 8px; }
+.yfm-cut-content > :last-child { margin-bottom: 0; }
+
+.yfm-tabs { margin-block: 0 1em; border-bottom: 1px solid var(--border); }
+.yfm-tab-list { display: flex; gap: 16px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+
+.yfm-tab-list > button {
+  margin-bottom: -1px;
+  padding: 7px 1px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.yfm-tab-list > button[aria-selected="true"] { color: var(--fg); border-color: var(--accent); }
+.yfm-tab { padding-block: 14px 6px; }
+.yfm-tab > :last-child { margin-bottom: 0; }
+.yfm-table td > :last-child, .yfm-table th > :last-child { margin-bottom: 0; }
+.yfm-align-top-left { vertical-align: top; text-align: left; }
+.yfm-align-top-center { vertical-align: top; text-align: center; }
+.yfm-align-top-right { vertical-align: top; text-align: right; }
+.yfm-align-center { vertical-align: middle; text-align: center; }
+.yfm-align-bottom-left { vertical-align: bottom; text-align: left; }
+.yfm-align-bottom-center { vertical-align: bottom; text-align: center; }
+.yfm-align-bottom-right { vertical-align: bottom; text-align: right; }
+
 /* main is as wide as the window and the reading column is what gets capped, so a table or a
    code block too wide for that column can keep growing into the margins instead of hiding
    the rest of itself behind a horizontal scrollbar. Whatever fits stays where it was.
@@ -163,7 +215,7 @@ main > table, main > .code-block {
   max-width: 100%;
 }
 
-#theme-toggle, #edit, #copy-file {
+#theme-toggle, #edit, #copy-file, #flavor-toggle {
   position: fixed;
   top: 12px;
   z-index: 2;
@@ -180,10 +232,11 @@ main > table, main > .code-block {
   cursor: pointer;
 }
 
-#theme-toggle:hover, #edit:hover, #copy-file:hover { opacity: 1; }
+#theme-toggle:hover, #edit:hover, #copy-file:hover, #flavor-toggle:hover { opacity: 1; }
 #theme-toggle { right: 12px; }
 #edit { right: 48px; }
 #copy-file { right: 84px; }
+#flavor-toggle { right: 120px; width: 36px; font-size: 11px; }
 #edit[data-failed], #copy-file[data-failed] { color: var(--kw); border-color: var(--kw); opacity: 1; }
 #copy-file[data-done] { color: var(--accent); border-color: var(--accent); opacity: 1; }
 
@@ -259,7 +312,7 @@ html:not([data-tree]) #files { display: none; }
 #tree-toggle::before { content: "\25c2"; display: block; font-size: 13px; line-height: 1; transition: transform .2s; }
 html:not([data-tree]) #tree-toggle::before { transform: rotate(180deg); }
 
-[data-offline] #edit { opacity: .15; pointer-events: none; }
+[data-offline] #edit, [data-offline] #flavor-toggle { opacity: .15; pointer-events: none; }
 
 [data-stale] body::after, [data-offline] body::after {
   position: fixed;

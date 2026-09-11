@@ -22,7 +22,8 @@ Prints a URL, opens a browser and exits — the server stays behind, the termina
 Edit the file and the page reloads itself. `mds --stop` when you are done. Run mds again with
 another path and it joins the page already open, and `mds --service install` puts an empty
 server in your login items so there is always one to join. The URL carries a one-off key, so
-pass it around whole.
+pass it around whole. YFM notes, cuts, tabs and multiline tables are detected automatically;
+the md/yfm button switches the current page when needed.
 
 ```
 -d, --depth N      how deep to walk, 0 is root only, -1 unlimited (default 5)
